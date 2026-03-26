@@ -1,0 +1,39 @@
+openapi: 3.0.3
+info:
+  title: Realtime Chat API
+  version: 1.0.0
+servers:
+  - url: http://localhost:8080
+paths:
+  /auth/register:
+    post:
+      summary: Register user
+      requestBody:
+        required: true
+      responses:
+        "201":
+          description: Created
+  /auth/login:
+    post:
+      summary: Login user
+      responses:
+        "200":
+          description: OK
+  /messages/{chat_id}:
+    get:
+      summary: Fetch chat history
+      parameters:
+        - in: path
+          name: chat_id
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: OK
+  /ws:
+    get:
+      summary: WebSocket connection endpoint
+      responses:
+        "101":
+          description: Switching Protocols
+
