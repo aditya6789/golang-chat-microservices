@@ -1,4 +1,4 @@
-# Binaries
+# Go binaries and test artifacts
 *.exe
 *.exe~
 *.dll
@@ -7,41 +7,10 @@
 *.test
 *.out
 
-# Build directories
+# Build output
 bin/
-dist/
-build/
-tmp/
 
-# Go workspace/cache
+# Coverage files
 *.coverprofile
 coverage.out
-
-# Environment files
-.env
-.env.local
-.env.*.local
-
-# Logs
-*.log
-logs/
-
-# OS files
-.DS_Store
-Thumbs.db
-
-# IDE/editor
-.idea/
-.vscode/
-*.swp
-*.swo
-
-# Docker / local data
-pg_data/
-redis_data/
-nats_data/
-
-# Optional: generated docs artifacts
-docs/swagger.json
-docs/swagger.yml
 
