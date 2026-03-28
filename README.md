@@ -57,7 +57,7 @@ I structured it this way to practice how a real chat product splits **auth**, **
 
 ## Future ideas
 
-None of the following exists in the codebase yet—it is just a **personal backlog** of things I might build next. They all fit the architecture I already have (Go services, Postgres, Redis, NATS, WebSockets).
+None of the following exists in the codebase yet—it is just a **personal backlog** of things I might build next. They extend what I already have (Go services, Postgres, Redis, NATS, WebSockets today; WebRTC later for realtime media).
 
 ### Chat and UX
 
@@ -80,6 +80,11 @@ None of the following exists in the codebase yet—it is just a **personal backl
 - **Attachments** — presigned uploads (S3 or MinIO), `file` message type with limits.
 - **Link previews** — cached, rate-limited Open Graph fetches.
 
+### Voice and video (native, first-party)
+
+- **Voice and video calling** — built in-house on **WebRTC** (browser / mobile WebRTC APIs), with **signaling** over my own services (no third-party calling SDKs or paid CPaaS like Twilio/Agora for the core path). I would own the offer/answer/ICE flow, session state, and friend-gated call setup the same way as DMs today. For tough NAT scenarios I would run **self-hosted STUN/TURN** (e.g. coturn) under my control—not an external “video API,” just standard infra.
+- **Optional extras later** — group calls, screen share, quality adaptation—still on the same native WebRTC stack.
+
 ### Reliability and scale
 
 - **NATS JetStream** — durable consumers, replay, DLQ for bad messages.
@@ -88,6 +93,7 @@ None of the following exists in the codebase yet—it is just a **personal backl
 
 ### Security
 
+- **End-to-end encryption (E2EE)** — for messages and, once calls exist, for media where feasible: **keys stay on clients**, servers only route ciphertext (or opaque blobs). That implies real crypto work—identity keys, device keys, rotation, lost-device recovery, and careful threat modeling—not just “TLS to the gateway.”
 - **Stronger sessions** — device binding, sign-out-everywhere, stricter refresh handling.
 - **OAuth2 / OIDC** — social or workplace login through `auth-service`.
 - **mTLS** between services if I ever deploy to a stricter network.
