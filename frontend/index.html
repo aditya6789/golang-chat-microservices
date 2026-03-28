@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#0c0f14" />
+  <title>Orbit Chat</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <!-- Auth -->
+  <div class="view" data-view="auth" id="viewAuth">
+    <div class="auth-layout">
+      <div class="auth-brand">
+        <div class="logo-mark">◉</div>
+        <h1>Orbit Chat</h1>
+        <p>Realtime messaging · JWT · WebSockets</p>
+      </div>
+      <div class="auth-card">
+        <div class="auth-tabs">
+          <button type="button" class="auth-tab active" data-tab="login">Sign in</button>
+          <button type="button" class="auth-tab" data-tab="register">Create account</button>
+        </div>
+        <p class="auth-error" id="authError" role="alert"></p>
+
+        <form class="auth-panel" data-panel="login" id="formLogin">
+          <label>Email</label>
+          <input type="email" id="loginEmail" required autocomplete="email" placeholder="you@example.com" />
+          <label>Password</label>
+          <input type="password" id="loginPass" required autocomplete="current-password" placeholder="••••••••" />
+          <button type="submit" class="btn primary full">Sign in</button>
+        </form>
+
+        <form class="auth-panel hidden" data-panel="register" id="formRegister">
+          <label>Email</label>
+          <input type="email" id="regEmail" required autocomplete="email" />
+          <label>Username</label>
+          <input type="text" id="regUser" required autocomplete="username" />
+          <label>Password (min 8)</label>
+          <input type="password" id="regPass" required minlength="8" autocomplete="new-password" />
+          <button type="submit" class="btn primary full">Create account</button>
+        </form>
+
+        <p class="auth-hint">Backend: <code>http://localhost:8080</code> · change in settings after login.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Main app -->
+  <div class="view hidden" data-view="main" id="viewMain">
+    <div class="app-shell">
+      <button type="button" class="sidebar-toggle" id="btnSidebarToggle" aria-label="Toggle chats">☰</button>
+
+      <aside class="sidebar" id="sidebar">
+        <header class="sidebar-head">
+          <div class="sidebar-brand">
+            <span class="logo-mark sm">◉</span>
+            <span>Chats</span>
+          </div>
+          <div class="sidebar-actions">
+            <button type="button" class="btn icon" id="btnRefreshChats" title="Refresh">↻</button>
+            <button type="button" class="btn icon" id="btnOpenSettings" title="Settings">⚙</button>
+          </div>
+        </header>
+
+        <div class="sidebar-user">
+          <div class="avatar" id="sidebarAvatar" aria-hidden="true"></div>
+          <div class="sidebar-user-text">
+            <strong id="sidebarUser">…</strong>
+            <span id="sidebarUserSub"></span>
+          </div>
+          <button type="button" class="btn text" id="btnLogout">Log out</button>
+        </div>
+
+        <div class="new-chat-row">
+          <button type="button" class="btn secondary small" id="btnOpenNewDirect">+ Direct</button>
+          <button type="button" class="btn secondary small" id="btnOpenNewGroup">+ Group</button>
+        </div>
+
+        <ul class="chat-list" id="chatList"></ul>
+      </aside>
+
+      <main class="main-pane">
+        <div class="thread-empty" id="threadEmpty">
+          <div class="empty-illu">💬</div>
+          <h2>Select a conversation</h2>
+          <p>Start a direct chat or create a group from the sidebar.</p>
+        </div>
+
+        <div class="thread-panel hidden" id="threadPanel">
+          <header class="thread-header">
+            <div class="thread-title-block">
+              <h2 id="threadTitle">Chat</h2>
+              <p class="thread-sub" id="threadSubtitle"></p>
+              <p class="typing-bar hidden" id="typingBar"></p>
+            </div>
+            <div class="thread-header-right">
+              <span class="ws-dot off" id="wsDot" title="Realtime connection"></span>
+              <div class="thread-menu-wrap">
+                <button type="button" class="btn icon" id="btnThreadMenu" aria-haspopup="true">⋮</button>
+                <div class="dropdown" id="threadMenu">
+                  <button type="button" id="btnAddMember">Add member (group)</button>
+                </div>
+              </div>
+            </div>
+          </header>
+
+          <div class="message-scroll">
+            <div class="message-list" id="messageList"></div>
+          </div>
+
+          <footer class="composer">
+            <textarea id="composerInput" rows="1" placeholder="Message… (Enter to send, Shift+Enter newline)"></textarea>
+            <button type="button" class="btn primary" id="btnSend">Send</button>
+          </footer>
+        </div>
+      </main>
+    </div>
+  </div>
+
+  <!-- Modals -->
+  <div class="modal" id="modalSettings">
+    <div class="modal-backdrop" data-close-modal></div>
+    <div class="modal-card">
+      <h3>Connection</h3>
+      <p class="muted">API Gateway base URL</p>
+      <input type="url" id="apiBaseField" class="modal-input" />
+      <div class="modal-actions">
+        <button type="button" class="btn secondary" data-close-modal>Cancel</button>
+        <button type="button" class="btn primary" id="btnSaveApi">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal" id="modalDirect">
+    <div class="modal-backdrop" data-close-modal></div>
+    <div class="modal-card">
+      <h3>New direct chat</h3>
+      <p class="muted">Other user’s account ID (UUID from their profile).</p>
+      <form id="formDirect">
+        <input type="text" id="directOtherId" class="modal-input" required placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" />
+        <div class="modal-actions">
+          <button type="button" class="btn secondary" data-close-modal>Cancel</button>
+          <button type="submit" class="btn primary">Start chat</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div class="modal" id="modalGroup">
+    <div class="modal-backdrop" data-close-modal></div>
+    <div class="modal-card">
+      <h3>New group</h3>
+      <form id="formGroup">
+        <label>Group name</label>
+        <input type="text" id="groupNameInput" class="modal-input" placeholder="Team" />
+        <label>Member UUIDs (comma separated)</label>
+        <input type="text" id="groupMembersInput" class="modal-input" placeholder="uuid1, uuid2" />
+        <div class="modal-actions">
+          <button type="button" class="btn secondary" data-close-modal>Cancel</button>
+          <button type="submit" class="btn primary">Create</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <script type="module">
+    import { init } from "./js/app.js";
+    init();
+  </script>
+</body>
+</html>

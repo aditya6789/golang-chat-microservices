@@ -73,26 +73,63 @@ Downstream services receive `X-User-Id` and `X-Request-Id` on proxied requests.
 
 ## Local Development
 
-1. Copy env:
+### Pehli baar — step by step (saari services + frontend)
 
-```bash
-cp .env.example .env
-```
+1. **Install karo:** [Docker Desktop](https://www.docker.com/products/docker-desktop/) (Compose included) aur **Go 1.22+** (sirf test UI serve karne ke liye).
 
-2. Start services:
+2. **Repo folder me jao** (jahan `docker-compose.yml` hai):
+
+   ```bash
+   cd path/to/realtime-chat-system
+   ```
+
+3. **Env file:** `docker-compose.yml` har service par `env_file: .env.example` use karta hai, isliye **copy zaroori nahi**. Custom values ke liye:
+
+   ```bash
+   cp .env.example .env
+   ```
+
+   Windows (PowerShell): `Copy-Item .env.example .env` — phir compose me `env_file: .env` tum khud badal sakte ho ya `docker compose --env-file .env up --build`.
+
+4. **Saari backend services ek saath** (Postgres, Redis, NATS + 6 Go services):
+
+   ```bash
+   docker compose up --build
+   ```
+
+   Pehli baar Postgres `migrations/` folder se `001` aur `002` SQL chala deta hai. **Purana volume** ho to nayi migration manually: `docker compose exec postgres psql -U chat_user -d chat_db -f` … ya volume hata ke fresh (`docker compose down -v` — **data wipe**).
+
+5. **Verify:** jab logs me errors na hon, health URLs open karo:
+
+   | Service        | URL                          |
+   | -------------- | ---------------------------- |
+   | API Gateway    | http://localhost:8080/healthz |
+   | Auth           | http://localhost:8081/healthz |
+   | User           | http://localhost:8082/healthz |
+   | Chat (WS)      | http://localhost:8083/healthz |
+   | Message        | http://localhost:8084/healthz |
+   | Notification   | http://localhost:8085/healthz |
+
+6. **Frontend (Orbit Chat UI)** — **naya terminal**, repo root se (Docker wala chalta rehne do):
+
+   ```bash
+   go run ./cmd/serve-frontend
+   ```
+
+7. **Browser:** `http://127.0.0.1:8888` kholo. Sign in / Create account → sidebar se **Direct** / **Group** → chat select karo → message bhejo (WebSocket realtime). API URL badalne ke liye **⚙ Settings** (default `http://localhost:8080`).
+
+8. **Direct chat test:** do users chahiye — ek normal window, ek **Incognito**; dono register → ek user ka UUID (profile) doosre se **New direct chat** me paste karo.
+
+**Rokna:** terminal me `Ctrl+C`; containers band: `docker compose down` (volume rakhna ho to `-v` mat lagao).
+
+### Short recap
 
 ```bash
 docker compose up --build
+# dusri window:
+go run ./cmd/serve-frontend
+# browser: http://127.0.0.1:8888  (Orbit Chat UI)  →  API http://localhost:8080
 ```
-
-3. Health checks:
-
-- Gateway: `http://localhost:8080/healthz`
-- Auth: `http://localhost:8081/healthz`
-- User: `http://localhost:8082/healthz`
-- Chat: `http://localhost:8083/healthz`
-- Message: `http://localhost:8084/healthz`
-- Notification: `http://localhost:8085/healthz`
 
 ## Testing
 

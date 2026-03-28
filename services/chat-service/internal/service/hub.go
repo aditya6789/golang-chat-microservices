@@ -82,18 +82,16 @@ func (h *Hub) HandleInbound(ctx context.Context, e model.Event) error {
 func (h *Hub) StreamChat(ctx context.Context, connKey, chatID string) {
 	pubsub := h.repo.Subscribe(ctx, chatID)
 	defer pubsub.Close()
-	ch := pubsub.Channel()
 	for {
-		select {
-		case <-ctx.Done():
+		msg, err := pubsub.ReceiveMessage(ctx)
+		if err != nil {
 			return
-		case msg := <-ch:
-			h.mu.RLock()
-			conn, ok := h.conns[connKey]
-			h.mu.RUnlock()
-			if ok && conn != nil {
-				_ = conn.WriteMessage(websocket.TextMessage, []byte(msg.Payload))
-			}
+		}
+		h.mu.RLock()
+		conn, ok := h.conns[connKey]
+		h.mu.RUnlock()
+		if ok && conn != nil {
+			_ = conn.WriteMessage(websocket.TextMessage, []byte(msg.Payload))
 		}
 	}
 }

@@ -13,4 +13,5 @@ bin/
 # Coverage files
 *.coverprofile
 coverage.out
+.env
 

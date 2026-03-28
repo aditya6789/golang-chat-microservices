@@ -14,6 +14,12 @@ func AuthRequired(svc *service.GatewayService) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		auth := c.GetHeader("Authorization")
 		if auth == "" {
+			if q := c.Query("access_token"); q != "" {
+				auth = "Bearer " + q
+				c.Request.Header.Set("Authorization", auth)
+			}
+		}
+		if auth == "" {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
 			return
 		}

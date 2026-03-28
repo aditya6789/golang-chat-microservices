@@ -21,7 +21,7 @@ func main() {
 	h := handler.New(svc)
 
 	r := gin.New()
-	r.Use(gin.Recovery(), gin.Logger(), httpx.ErrorMiddleware(), pkg.RateLimit(100, 200))
+	r.Use(gin.Recovery(), gin.Logger(), httpx.ErrorMiddleware(), pkg.CORSMiddleware(), pkg.RateLimit(100, 200))
 	r.GET("/healthz", h.Health)
 	r.GET("/metrics", gin.WrapH(promhttp.Handler()))
 	r.Any("/auth/*path", h.AuthProxy)
