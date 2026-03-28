@@ -5,17 +5,18 @@
 [![Status](https://img.shields.io/badge/status-active-success)]()
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](./CONTRIBUTING.md)
 
-**Production-style realtime chat** with JWT auth, WebSockets, friend discovery, direct & group chats, and an event-driven core. Built as multiple Go services behind an API gateway—not a monolith demo.
+**Production-style realtime chat** I built with Go microservices: JWT auth, WebSockets, friend discovery, direct and group chats, and an event-driven core. Everything sits behind an API gateway—not a single monolith binary.
 
-**Why this repo exists:** show how a chat product can be split into bounded services (auth, users, messaging, realtime transport) with clear data ownership, Dockerized deployment, and observability hooks.
+I structured it this way to practice how a real chat product splits **auth**, **users**, **messaging**, and **realtime** into separate services, with Postgres as the source of truth, Redis for presence and fan-out, and NATS for async work. Docker Compose ties the stack together for local runs.
 
-> If this project helped you or you found it interesting, please give it a star — it really helps!
+> ⭐ If you find this project useful, consider giving it a star — it really helps!
 
 ---
 
 ## Table of contents
 
 - [Features](#features)
+- [Future ideas](#future-ideas)
 - [Live demo](#live-demo)
 - [Screenshots](#screenshots)
 - [Architecture](#architecture)
@@ -31,8 +32,8 @@
 - [Security & production hardening](#security--production-hardening)
 - [Observability](#observability)
 - [Testing](#testing)
-- [Possible extensions](#possible-extensions-not-in-this-repo)
-- [Out of scope](#out-of-scope)
+- [Infra and tooling I have not added yet](#infra-and-tooling-i-have-not-added-yet)
+- [What I deliberately left out](#what-i-deliberately-left-out)
 - [Contributing](#contributing)
 - [FAQ](#faq)
 - [License](#license)
@@ -54,9 +55,65 @@
 
 ---
 
+## Future ideas
+
+None of the following exists in the codebase yet—it is just a **personal backlog** of things I might build next. They all fit the architecture I already have (Go services, Postgres, Redis, NATS, WebSockets).
+
+### Chat and UX
+
+- **Read receipts in the UI** — I already persist `message_receipts`; I still want to show delivered/read in Orbit Chat.
+- **Reply threading** — `reply_to_message_id`, quoted bubbles, stable ordering.
+- **Reactions** — emoji per message, pushed over the WebSocket.
+- **Edit and delete** — soft delete, `edited_at`, realtime sync to other clients.
+- **Mentions** — `@username` resolution and light notifications.
+- **Unread counts** — per-chat read cursors or a small aggregate API for the sidebar.
+
+### Social and rooms
+
+- **Friend requests** — pending / accept / reject instead of only instant mutual friends.
+- **Block and report** — basic moderation hooks.
+- **Group admin roles** — promote, kick, transfer ownership.
+- **Invite links** — token-based joins while keeping the same trust rules (e.g. friends-only groups).
+
+### Media and rich content
+
+- **Attachments** — presigned uploads (S3 or MinIO), `file` message type with limits.
+- **Link previews** — cached, rate-limited Open Graph fetches.
+
+### Reliability and scale
+
+- **NATS JetStream** — durable consumers, replay, DLQ for bad messages.
+- **Tighter idempotency on WebSockets** — client ids aligned with the REST idempotency key pattern.
+- **Cursor-based history** — `before` / `after` instead of offset-only at higher volume.
+
+### Security
+
+- **Stronger sessions** — device binding, sign-out-everywhere, stricter refresh handling.
+- **OAuth2 / OIDC** — social or workplace login through `auth-service`.
+- **mTLS** between services if I ever deploy to a stricter network.
+
+### Observability and operations
+
+- **OpenTelemetry** — traces from gateway → services → DB.
+- **JSON logs** — always carry `X-Request-Id`.
+- **CI** — `go test`, linters, maybe a Compose smoke job on every push.
+
+### Notifications
+
+- **Push / email** — actually connect `notification-service` to FCM, APNS, SES, etc.
+
+### Testing and docs
+
+- **E2E** — Playwright (or similar) against Compose: sign up → friend → DM → send.
+- **Swagger UI** — tiny page over the existing `docs/swagger.yaml`.
+
+**What I will probably pick up first:** read receipts in the UI, then reply threading, then CI, then presigned uploads, then friend requests—roughly in that order.
+
+---
+
 ## Live demo
 
-**Hosted demo:** Not deployed yet.
+**Hosted demo:** Coming soon 🚀
 
 **Local:** Follow [Local setup](#local-setup-docker--ui): UI at http://127.0.0.1:8888, API at http://localhost:8080.
 
@@ -64,9 +121,7 @@
 
 ## Screenshots
 
-**Chat UI:** Not added yet.
-
-**Architecture:** Not added yet.
+Screenshots will be added soon.
 
 ---
 
@@ -131,6 +186,8 @@ flowchart LR
 
 ## Design decisions
 
+These are the trade-offs I had in mind when I split the system this way:
+
 | Choice | Rationale |
 |--------|-----------|
 | **Microservices** | Separates **auth**, **identity/presence**, **durable messaging**, and **realtime transport** so each can scale and fail independently; matches how chat products evolve in production (different SLAs per path). |
@@ -144,7 +201,7 @@ flowchart LR
 ## Scaling & operations
 
 - **Horizontal scale:** Run **multiple `chat-service` instances** behind a load balancer with **sticky sessions** (or shared Redis so any instance can publish/subscribe the same `chat:<id>` channels). **message-service** and **auth-service** scale statelessly behind the gateway once Postgres and NATS handle throughput.
-- **Bottlenecks:** Postgres (writes + history reads), Redis (channel fan-out), NATS (subject throughput). Tune connection pools, add read replicas for history, and consider JetStream retention if you need replayable pipelines.
+- **Bottlenecks:** Postgres (writes + history reads), Redis (channel fan-out), NATS (subject throughput). Connection pool tuning, read replicas for history, and JetStream retention matter if I ever need replayable pipelines.
 - **State:** User/chat/message state lives in **Postgres**; **Redis** is cache/ephemeral; **NATS** is transit—design consumers to be idempotent (e.g. message idempotency keys already supported on `POST /messages`).
 
 ---
@@ -223,7 +280,7 @@ Base URL (local): **`http://localhost:8080`**
 | GET | `/ws` | WebSocket (query: `chat_id`, `access_token`) |
 | GET | `/docs/swagger.yaml` | OpenAPI-style description |
 
-> **Note:** `POST /friends` on the gateway also proxies to user-service if you run a **new** gateway image; the SPA uses **`/users/friends`** so it works even with an older gateway build.
+> **Note:** I route friend APIs through **`/users/friends`** in the SPA so an older gateway build still works; newer gateways can also expose `POST /friends` directly.
 
 ### Example: login + open DM (curl)
 
@@ -322,11 +379,11 @@ docker compose exec -T postgres psql -U chat_user -d chat_db -f /docker-entrypoi
 | **JWT** | HS256-style shared secret; validated at **gateway** (REST) and **chat-service** (WebSocket); `sub` = user id | Rotate **`JWT_SECRET`**, short access TTL, asymmetric keys (RS256) if multiple issuers |
 | **Identity on wire** | Gateway sets **`X-User-Id`** and **`X-Request-Id`** on proxied requests | Ensure internal network is trusted; never expose downstream ports publicly without mTLS |
 | **Rate limiting** | Token bucket on gateway (`api-gateway` middleware) | Tune per route; add IP/user-based limits at edge (CDN / WAF) |
-| **CORS** | Enabled for browser SPA | Restrict **`AllowOrigins`** to your frontend origin only |
+| **CORS** | Enabled for browser SPA | I would restrict **`AllowOrigins`** to my real frontend origin in production |
 | **Data** | Passwords hashed in auth layer; friend-gated DMs/groups in message-service | Encrypt at rest (managed Postgres), audit logs, secret manager for env |
 | **Transport** | Plain HTTP in Compose | Terminate **TLS** at ingress / reverse proxy; HSTS in production |
 
-This repo is a **strong architecture demo**, not a turnkey public deployment—combine the above with **structured logging**, **distributed tracing**, and **alerting** on `/healthz` and error rates.
+I treat this as a **strong architecture demo**, not something I would expose to the internet as-is—real production would add **structured logging**, **distributed tracing**, and **alerting** on `/healthz` and error rates.
 
 ---
 
@@ -336,7 +393,7 @@ This repo is a **strong architecture demo**, not a turnkey public deployment—c
 |--------|--------|------|
 | **Liveness** | `GET /healthz` on each service | Use for orchestrator probes (K8s `livenessProbe` / Docker health) |
 | **Metrics** | `GET /metrics` (Prometheus exposition) | Scrape per service; correlate with gateway latency and DB pool stats |
-| **Request correlation** | `X-Request-Id` set at gateway | Propagate in logs across services when you add structured logging |
+| **Request correlation** | `X-Request-Id` set at gateway | I would propagate this in logs across services once logging is structured |
 | **Realtime health** | WS connect success + Redis/NATS connectivity | Monitor chat-service restarts and NATS consumer lag |
 
 ---
@@ -349,43 +406,42 @@ go test ./...
 
 ---
 
-## Possible extensions (not in this repo)
+## Infra and tooling I have not added yet
 
-Nothing below ships in this codebase today — these are **optional directions** if you harden or productize the stack:
+I have not set any of this up in the repo; it is the sort of work I would do when polishing for production or interviews:
 
-- **Hosted demo** and **screenshots** under `docs/screenshots/` — not part of this repo today.
-- **CI** — e.g. GitHub Actions for `go test`, linters, optional `docker compose` smoke (no workflow files here).
-- **Published OpenAPI** — Swagger UI / GitHub Pages; today the repo has `docs/swagger.yaml` and the gateway exposes `GET /docs/swagger.yaml` when running locally.
-- **NATS JetStream** or explicit **DLQ** handling for failed consumer messages (core path uses basic pub/sub consumers).
-- **E2E** browser tests (e.g. Playwright) against a Compose test profile.
-- **Kafka** bridge for orgs that mandate Kafka instead of NATS.
+- A **public hosted demo** and **screenshots** under `docs/screenshots/`.
+- **GitHub Actions** (or similar) for `go test`, lint, optional Compose smoke—no workflow files checked in right now.
+- **Hosted API docs** — beyond the raw file, I only ship `docs/swagger.yaml` and `GET /docs/swagger.yaml` on the gateway in local runs.
+- **JetStream / DLQ** on top of plain NATS pub/sub for persistence consumers.
+- **Kafka** as an alternative bus—only if I ever need to align with a Kafka-first environment.
 
 ---
 
-## Out of scope
+## What I deliberately left out
 
-- **Kafka** is not wired; **NATS** is the message bus here.
-- **Kubernetes manifests / Helm** — bring your own cluster definitions.
-- **Managed auth** (OAuth2/OIDC) — extension point only.
+- **Kafka** in the default path—I standardised on **NATS** for this project.
+- **Kubernetes / Helm** — I run everything with Compose locally; K8s would be a separate effort.
+- **Managed OAuth** — not wired; the codebase is JWT + email/password first.
 
 ---
 
 ## Contributing
 
-PRs and issues are welcome. See **[CONTRIBUTING.md](./CONTRIBUTING.md)** for guidelines (branching, commits, how to run tests). If that file is missing, open an issue or PR to add it—**PRs welcome** applies once the doc exists.
+Issues and PRs are welcome. Please read **[CONTRIBUTING.md](./CONTRIBUTING.md)** for how I like branches, commits, and tests run before a PR.
 
 ---
 
 ## FAQ
 
 **Why not one Go binary?**  
-A single deployable is simpler for tiny teams; this repo optimises for **clear boundaries** and **independent scaling**—the trade-off is more moving parts and operational surface.
+I wanted to practice **service boundaries** and **independent scaling**; the cost is more moving parts and ops surface, which is intentional for this learning project.
 
-**Can I swap Redis or NATS?**  
-Yes, but you’d reimplement adapters: Redis drives room fan-out; NATS drives async persistence—replace with equivalents that fit your SRE standards.
+**Could Redis or NATS be swapped?**  
+Yes, but the adapters would need rewriting: I use Redis for fan-out and NATS for async persistence—same roles, different products, if someone forks and swaps them.
 
-**Friends table missing locally?**  
-Postgres init scripts run only on first volume creation; apply `003_friendships.sql` manually (see [Database migrations](#database-migrations)).
+**`friendships` table missing after `docker compose`?**  
+Postgres only runs `migrations/` on a **fresh** volume. On an old volume, run `003_friendships.sql` yourself—see [Database migrations](#database-migrations).
 
 ---
 
