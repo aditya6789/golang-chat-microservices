@@ -30,7 +30,8 @@ func main() {
 	}
 
 	repo := repository.NewUserRepository(db)
-	svc := service.NewAuthService(repo, cfg.JWTSecret, cfg.JWTTTLMinute)
+	refreshRepo := repository.NewRefreshRepository(db)
+	svc := service.NewAuthService(repo, refreshRepo, cfg.JWTSecret, cfg.JWTTTLMinute, cfg.RefreshTTLDays)
 	h := handler.NewAuthHandler(svc)
 
 	r := gin.New()
@@ -39,6 +40,7 @@ func main() {
 	r.GET("/metrics", gin.WrapH(promhttp.Handler()))
 	r.POST("/auth/register", h.Register)
 	r.POST("/auth/login", h.Login)
+	r.POST("/auth/refresh", h.Refresh)
 	r.GET("/auth/validate", h.Validate)
 
 	log.Info("auth-service running")

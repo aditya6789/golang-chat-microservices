@@ -21,7 +21,9 @@ Chat Service handles realtime communication over WebSocket and fan-out using Red
 
 - `GET /healthz`
 - `GET /metrics`
-- `GET /ws?user_id=<uid>&chat_id=<cid>`
+- `GET /ws?chat_id=<cid>&access_token=<JWT>` (or `Authorization: Bearer` on upgrade where the client supports it)
+
+JWT subject is the user id; `user_id` query is **not** trusted. Membership is verified against `message-service` before upgrade.
 
 ## Supported Event Shape
 
@@ -48,7 +50,8 @@ Server enriches payload with `chat_id`, `sender_id`, and `at`.
 
 ## NATS Subject Convention
 
-- Outgoing persist event: `chat.message.persist`
+- Outgoing persist event: `chat.message.persist` (includes `idempotency_key`)
+- Read receipts: `chat.receipt.persist`
 
 ## Reconnect and Liveness
 
@@ -65,6 +68,8 @@ Server enriches payload with `chat_id`, `sender_id`, and `at`.
 ## Environment Variables
 
 - `CHAT_SERVICE_PORT` (default: `8083`)
+- `JWT_SECRET` (must match `auth-service`)
+- `MESSAGE_SERVICE_URL` (default: `http://localhost:8084`) — used for membership checks
 - `REDIS_ADDR`
 - `REDIS_PASSWORD`
 - `NATS_URL`
@@ -78,6 +83,6 @@ go run ./services/chat-service/cmd
 ## Notes for Production
 
 - Replace in-memory connection map with distributed session strategy for horizontal scaling
-- Add auth context extraction from JWT (currently query based for starter)
 - Add per-user/per-chat connection limits and WS flood protection
+- Secure `internal` membership API (mTLS or shared service secret) if `message-service` is exposed beyond the private network
 

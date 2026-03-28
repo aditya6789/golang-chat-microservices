@@ -20,8 +20,13 @@ Message Service is responsible for durable message storage and history retrieval
 
 - `GET /healthz`
 - `GET /metrics`
-- `POST /messages`
-- `GET /messages/:chat_id?limit=20&offset=0`
+- `GET /internal/chats/:chat_id/membership?user_id=` — service-to-service membership check (not exposed via gateway)
+- `POST /chats` — create chat (`X-User-Id` = creator)
+- `GET /chats` — list chats for `X-User-Id`
+- `POST /chats/:chat_id/members` — add member (group only)
+- `GET /chats/:chat_id/members` — list members (must be in chat)
+- `POST /messages` — sender is always `X-User-Id` (body no longer accepts `sender_id`)
+- `GET /messages/:chat_id?limit=20&offset=0` — requires membership
 
 ## Idempotency
 
@@ -40,7 +45,7 @@ DB constraint on `idempotency_key` prevents duplicate inserts when clients retry
 
 ## NATS Subjects
 
-- Consumed: `chat.message.persist`
+- Consumed: `chat.message.persist`, `chat.receipt.persist`
 - Published: `chat.message.created`
 
 ## Important Files

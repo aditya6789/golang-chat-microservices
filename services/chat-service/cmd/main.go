@@ -6,6 +6,7 @@ import (
 	"realtime-chat-system/pkg/infra"
 	"realtime-chat-system/pkg/httpx"
 	"realtime-chat-system/services/chat-service/config"
+	"realtime-chat-system/services/chat-service/internal/client"
 	"realtime-chat-system/services/chat-service/internal/handler"
 	"realtime-chat-system/services/chat-service/internal/repository"
 	"realtime-chat-system/services/chat-service/internal/service"
@@ -19,8 +20,9 @@ func main() {
 	rdb := infra.NewRedis()
 	nc, _ := infra.NewNATS()
 	repo := repository.New(rdb)
-	hub := service.NewHub(repo, nc)
-	h := handler.New(hub)
+	members := &client.MembershipClient{BaseURL: cfg.MessageServiceURL}
+	hub := service.NewHub(repo, nc, members)
+	h := handler.New(hub, cfg.JWTSecret)
 
 	r := gin.New()
 	r.Use(gin.Recovery(), gin.Logger(), httpx.ErrorMiddleware())

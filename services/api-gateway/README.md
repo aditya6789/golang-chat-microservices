@@ -24,9 +24,12 @@ API Gateway is the single entry point for clients. It routes requests to downstr
 - `GET /docs/swagger.yaml`
 - `ANY /auth/*path` (public)
 - `ANY /users/*path` (protected)
-- `ANY /messages/*path` (protected)
+- `ANY /messages` and `ANY /messages/*path` (protected)
+- `ANY /chats` and `ANY /chats/*path` (protected)
 - `ANY /chat/*path` (protected)
 - `ANY /ws` (protected proxy to chat-service websocket endpoint)
+
+On protected routes, the gateway validates JWT then sets **`X-User-Id`** (JWT `sub`) and **`X-Request-Id`** on the outbound proxied request.
 
 ## Authentication Flow
 

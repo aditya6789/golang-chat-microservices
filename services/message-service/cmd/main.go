@@ -25,16 +25,27 @@ func main() {
 	nc, _ := infra.NewNATS()
 
 	repo := repository.New(db)
-	svc := service.New(repo, nc)
+	chatRepo := repository.NewChatRepository(db)
+	receiptRepo := repository.NewReceiptRepository(db)
+	svc := service.New(repo, chatRepo, receiptRepo, nc)
 	h := handler.New(svc)
+	ch := handler.NewChatHandler(chatRepo)
 	_, _ = nc.Subscribe("chat.message.persist", func(msg *nats.Msg) {
 		_ = svc.PersistFromEvent(context.Background(), msg.Data)
+	})
+	_, _ = nc.Subscribe("chat.receipt.persist", func(msg *nats.Msg) {
+		_ = svc.PersistReceiptFromEvent(context.Background(), msg.Data)
 	})
 
 	r := gin.New()
 	r.Use(gin.Recovery(), gin.Logger(), httpx.ErrorMiddleware())
 	r.GET("/healthz", func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"status": "ok"}) })
 	r.GET("/metrics", gin.WrapH(promhttp.Handler()))
+	r.GET("/internal/chats/:chat_id/membership", ch.InternalMembership)
+	r.POST("/chats", ch.Create)
+	r.GET("/chats", ch.ListMine)
+	r.POST("/chats/:chat_id/members", ch.AddMember)
+	r.GET("/chats/:chat_id/members", ch.ListMembers)
 	r.POST("/messages", h.Create)
 	r.GET("/messages/:chat_id", h.History)
 	_ = r.Run(":" + cfg.Port)

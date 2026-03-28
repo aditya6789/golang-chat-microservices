@@ -4,6 +4,7 @@ import (
 	"net/http/httputil"
 	"net/url"
 
+	"realtime-chat-system/services/api-gateway/internal/model"
 	"realtime-chat-system/services/api-gateway/internal/repository"
 )
 
@@ -12,9 +13,14 @@ type GatewayService struct {
 }
 
 func New(auth *repository.AuthRepository) *GatewayService { return &GatewayService{auth: auth} }
+
 func (s *GatewayService) Validate(authHeader string) error {
 	_, err := s.auth.Validate(authHeader)
 	return err
+}
+
+func (s *GatewayService) ValidateClaims(authHeader string) (*model.Claims, error) {
+	return s.auth.Validate(authHeader)
 }
 
 func (s *GatewayService) Proxy(target string) *httputil.ReverseProxy {

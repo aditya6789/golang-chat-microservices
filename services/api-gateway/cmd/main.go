@@ -29,7 +29,10 @@ func main() {
 	protected := r.Group("/")
 	protected.Use(pkg.AuthRequired(svc))
 	protected.Any("/users/*path", h.UserProxy)
+	protected.Any("/messages", h.MessageProxy)
 	protected.Any("/messages/*path", h.MessageProxy)
+	protected.Any("/chats", h.MessageProxy)
+	protected.Any("/chats/*path", h.MessageProxy)
 	protected.Any("/chat/*path", h.ChatProxy)
 	protected.Any("/ws", h.ChatProxy)
 	r.GET("/docs/swagger.yaml", func(c *gin.Context) {

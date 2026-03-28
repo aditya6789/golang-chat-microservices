@@ -82,6 +82,8 @@ services:
     ports:
       - "8083:8083"
     depends_on:
+      message-service:
+        condition: service_started
       redis:
         condition: service_healthy
       nats:

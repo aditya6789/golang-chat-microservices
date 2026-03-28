@@ -4,11 +4,11 @@ Production-style starter for a realtime chat platform using clean architecture a
 
 ## Services
 
-- `services/api-gateway`: request routing, auth middleware, rate limiting
-- `services/auth-service`: register/login + JWT validation
-- `services/user-service`: user profile + Redis presence heartbeat
-- `services/chat-service`: WebSocket handling + Redis pub/sub realtime broadcast
-- `services/message-service`: PostgreSQL persistence + paginated history + idempotency
+- `services/api-gateway`: request routing, auth middleware, rate limiting, `X-User-Id` / `X-Request-Id` injection
+- `services/auth-service`: register/login, refresh tokens, JWT validation
+- `services/user-service`: user profile + Redis presence heartbeat (self-only via `X-User-Id`)
+- `services/chat-service`: WebSocket (JWT), membership check, Redis pub/sub, NATS persist + receipts
+- `services/message-service`: chats/members APIs, message persistence, read receipts, NATS consumers
 - `services/notification-service`: NATS consumer for notification events
 
 ## Tech Stack
@@ -36,36 +36,40 @@ Each service follows:
 
 ## Event Flow
 
-1. Client connects to `chat-service` over WebSocket: `/ws?user_id=...&chat_id=...`
-2. Incoming events (`message`, `typing`, `read_receipt`) are published to Redis channel: `chat:<chat_id>`
-3. Subscribers for same chat receive realtime updates
-4. Message events are published to NATS subject: `chat.message.persist`
-5. `message-service` consumes and stores messages in PostgreSQL
-6. `message-service` publishes `chat.message.created`
-7. `notification-service` consumes that event
+1. Client opens WebSocket on gateway: `GET /ws?chat_id=...&access_token=<JWT>` (or `Authorization: Bearer` where supported).
+2. `chat-service` validates JWT, verifies chat membership via `message-service`, then upgrades the connection.
+3. Inbound events (`message`, `typing`, `read_receipt`) are published to Redis channel `chat:<chat_id>` for realtime fan-out.
+4. `message` → NATS `chat.message.persist` (with `idempotency_key`) → `message-service` stores row (member-checked).
+5. `read_receipt` → NATS `chat.receipt.persist` → `message-service` upserts `message_receipts`.
+6. After insert, `message-service` publishes `chat.message.created` → `notification-service` consumes.
 
 ## Core Endpoints (via API Gateway `:8080`)
 
-- `POST /auth/register`
-- `POST /auth/login`
-- `GET /users/:id`
-- `POST /users/:id/heartbeat`
-- `POST /messages`
+Auth (public):
+
+- `POST /auth/register` → `access_token`, `refresh_token`
+- `POST /auth/login` → `access_token`, `refresh_token`
+- `POST /auth/refresh` → new token pair (rotation)
+
+Protected (require `Authorization: Bearer`):
+
+- `GET /users/:id` — only `:id` matching JWT subject
+- `POST /users/:id/heartbeat` — same
+- `POST /chats` — create direct (`member_ids`: one other user) or group (`name` + `member_ids`)
+- `GET /chats` — list chats for current user
+- `POST /chats/:chat_id/members` — add member (group only)
+- `GET /chats/:chat_id/members` — list members if you are in the chat
+- `POST /messages` — body: `chat_id`, `content`, `idempotency_key` (sender = JWT user)
 - `GET /messages/:chat_id?limit=20&offset=0`
-- `GET /ws?user_id=<id>&chat_id=<chat_id>`
+- `GET /ws?chat_id=<uuid>&access_token=<JWT>`
 - `GET /docs/swagger.yaml`
+
+Downstream services receive `X-User-Id` and `X-Request-Id` on proxied requests.
 
 ## Database Schema
 
-Migration file: `migrations/001_init.sql`
-
-Tables:
-
-- `users`
-- `chats`
-- `chat_members`
-- `messages` (with `idempotency_key`)
-- `message_receipts`
+- `migrations/001_init.sql` — `users`, `chats`, `chat_members`, `messages`, `message_receipts`
+- `migrations/002_refresh_tokens.sql` — `refresh_tokens`
 
 ## Local Development
 
@@ -98,6 +102,5 @@ go test ./...
 
 ## Notes
 
-- This is a production-oriented starter, not a complete finished product.
-- Add distributed rate limiting, request tracing, stronger auth propagation, and retry/DLQ policies before production rollout.
-
+- **Kafka** is not wired; NATS is the event bus. Quality-heavy tests and DevOps (CI/K8s) are out of scope unless you ask.
+- For existing PostgreSQL volumes, apply new SQL under `migrations/` manually if the container already ran older init scripts.
