@@ -699,3 +699,144 @@ code {
   gap: 0.5rem;
   margin-top: 1.1rem;
 }
+
+.modal-card.modal-wide {
+  max-width: 440px;
+}
+
+.muted.small {
+  font-size: 0.8rem;
+  margin: 0.35rem 0 0;
+}
+
+.btn.tiny {
+  padding: 0.2rem 0.45rem;
+  font-size: 0.85rem;
+  min-width: auto;
+}
+
+.friends-panel {
+  padding: 0 1rem 0.75rem;
+  border-bottom: 1px solid var(--border);
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.friends-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  margin-bottom: 0.45rem;
+}
+
+.friend-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.friend-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  font-size: 0.88rem;
+  padding: 0.35rem 0.5rem;
+  border-radius: 8px;
+  background: var(--bg2);
+  border: 1px solid transparent;
+}
+
+.friend-list li button {
+  flex-shrink: 0;
+}
+
+.friend-list .friend-meta {
+  min-width: 0;
+}
+
+.friend-list .friend-meta strong {
+  display: block;
+  font-weight: 600;
+}
+
+.friend-list .friend-meta span {
+  display: block;
+  font-size: 0.75rem;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.search-results {
+  list-style: none;
+  margin: 0.5rem 0 0;
+  padding: 0;
+  max-height: 240px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg2);
+}
+
+.search-results li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.65rem;
+  padding: 0.55rem 0.75rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.search-results li:last-child {
+  border-bottom: none;
+}
+
+.search-results .peer-meta strong {
+  display: block;
+  font-size: 0.9rem;
+}
+
+.search-results .peer-meta span {
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
+.friend-pick-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  max-height: 220px;
+  overflow-y: auto;
+  margin-top: 0.5rem;
+  padding: 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg2);
+}
+
+.friend-pick-row {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  font-size: 0.88rem;
+  cursor: pointer;
+}
+
+.friend-pick-row input {
+  flex-shrink: 0;
+}
+
+.friends-empty {
+  font-size: 0.82rem;
+  margin: 0.25rem 0 0;
+}

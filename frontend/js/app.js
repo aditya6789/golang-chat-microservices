@@ -12,12 +12,18 @@ import {
 /** @type {WebSocket | null} */
 let socket = null;
 let activeChatId = null;
+/** @type {{ type?: string, name?: string } | null} */
+let activeChatMeta = null;
 /** @type {Array<{id?: string, sender_id: string, content: string, created_at?: string, _ts?: number}>} */
 let messages = [];
 let typingClearTimer = null;
 let heartbeatTimer = null;
 let typingDebounce = null;
 let typingBurstOpen = false;
+
+/** @type {Record<string, string>} chatId -> display label for direct chats */
+const peerLabelCache = {};
+let directSearchTimer = null;
 
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
@@ -45,8 +51,25 @@ function fmtTime(iso) {
 
 function chatLabel(c) {
   if (c.type === "group" && c.name) return c.name;
-  if (c.type === "direct") return "Direct · " + (c.id || "").slice(0, 8) + "…";
+  if (c.type === "direct") {
+    if (c.id && peerLabelCache[c.id]) return peerLabelCache[c.id];
+    return "Direct · " + (c.id || "").slice(0, 8) + "…";
+  }
   return (c.type || "Chat") + " · " + (c.id || "").slice(0, 8);
+}
+
+async function enrichDirectLabels(chats) {
+  const me = jwtSub(getAccess());
+  const directs = (chats || []).filter((c) => c.type === "direct" && c.id && !peerLabelCache[c.id]);
+  await Promise.all(
+    directs.map(async (c) => {
+      const m = await api("GET", "/chats/" + encodeURIComponent(c.id) + "/members");
+      if (!m.ok || !m.data?.items) return;
+      const peer = m.data.items.find((x) => x.user_id !== me);
+      if (peer?.username) peerLabelCache[c.id] = peer.username;
+      else if (peer?.email) peerLabelCache[c.id] = peer.email;
+    })
+  );
 }
 
 async function loadChats() {
@@ -57,6 +80,7 @@ async function loadChats() {
     list.innerHTML = `<li class="chat-item empty">No chats yet</li>`;
     return;
   }
+  await enrichDirectLabels(r.data.items);
   r.data.items.forEach((c) => {
     const li = document.createElement("li");
     li.className = "chat-item" + (c.id === activeChatId ? " active" : "");
@@ -64,6 +88,174 @@ async function loadChats() {
     li.innerHTML = `<span class="chat-title">${escapeHtml(chatLabel(c))}</span><span class="chat-sub">${c.type}</span>`;
     li.addEventListener("click", () => openChat(c.id, c));
     list.appendChild(li);
+  });
+}
+
+async function loadFriends() {
+  const ul = $("#friendListSidebar");
+  const empty = $("#friendsEmpty");
+  if (!ul) return;
+  ul.innerHTML = "";
+  const r = await api("GET", "/users/friends");
+  if (!r.ok || !r.data?.items?.length) {
+    empty?.classList.remove("hidden");
+    return;
+  }
+  empty?.classList.add("hidden");
+  r.data.items.forEach((f) => {
+    const li = document.createElement("li");
+    const label = f.username || f.email || f.id.slice(0, 8);
+    li.innerHTML = `
+      <div class="friend-meta">
+        <strong>${escapeHtml(f.username || "User")}</strong>
+        <span>${escapeHtml(f.email || "")}</span>
+      </div>
+      <button type="button" class="btn secondary small" data-open-dm="${escapeHtml(f.id)}" data-dm-label="${escapeHtml(label)}">Message</button>`;
+    ul.appendChild(li);
+  });
+  ul.querySelectorAll("[data-open-dm]").forEach((btn) => {
+    btn.addEventListener("click", async (e) => {
+      const id = e.currentTarget.getAttribute("data-open-dm");
+      const lab = e.currentTarget.getAttribute("data-dm-label") || "";
+      if (!id) return;
+      await openDirectWithFriend(id, lab);
+    });
+  });
+}
+
+async function openDirectWithFriend(otherUserId, displayLabel) {
+  const dm = await api("POST", "/chats/direct", { other_user_id: otherUserId });
+  if (!dm.ok) {
+    alert((dm.data && dm.data.error) || "Could not open chat (are you friends?)");
+    return;
+  }
+  if (dm.data?.id && displayLabel) peerLabelCache[dm.data.id] = displayLabel;
+  closeModals();
+  await loadChats();
+  await openChat(dm.data.id, {
+    id: dm.data.id,
+    type: "direct",
+    name: displayLabel,
+  });
+}
+
+async function addFriendAndOpenChat(userId, username, email) {
+  const fr = await api("POST", "/users/friends", { user_id: userId });
+  if (!fr.ok) {
+    alert((fr.data && fr.data.error) || "Could not add friend");
+    return;
+  }
+  const label = username || email || userId.slice(0, 8);
+  const dm = await api("POST", "/chats/direct", { other_user_id: userId });
+  if (!dm.ok) {
+    alert((dm.data && dm.data.error) || "Friend added but chat failed");
+    await loadFriends();
+    return;
+  }
+  if (dm.data?.id) peerLabelCache[dm.data.id] = label;
+  $("#directSearchInput").value = "";
+  $("#directSearchResults").innerHTML = "";
+  $("#directSearchHint").textContent = "Start typing to search.";
+  closeModals();
+  await loadFriends();
+  await loadChats();
+  await openChat(dm.data.id, { id: dm.data.id, type: "direct", name: label });
+}
+
+function runDirectSearch() {
+  const q = ($("#directSearchInput").value || "").trim();
+  const hint = $("#directSearchHint");
+  const box = $("#directSearchResults");
+  if (!box) return;
+  box.innerHTML = "";
+  if (q.length < 2) {
+    hint.textContent = "Type at least 2 characters.";
+    return;
+  }
+  hint.textContent = "Searching…";
+  api("GET", "/users/search?q=" + encodeURIComponent(q)).then((r) => {
+    if (!r.ok) {
+      hint.textContent = "Search failed.";
+      return;
+    }
+    const items = r.data?.items || [];
+    hint.textContent = items.length ? `${items.length} result(s)` : "No matches.";
+    items.forEach((u) => {
+      const li = document.createElement("li");
+      li.innerHTML = `
+        <div class="peer-meta">
+          <strong>@${escapeHtml(u.username || "")}</strong>
+          <span>${escapeHtml(u.email || "")}</span>
+        </div>
+        <button type="button" class="btn primary small">Add & chat</button>`;
+      li.querySelector("button").addEventListener("click", () =>
+        addFriendAndOpenChat(u.id, u.username, u.email)
+      );
+      box.appendChild(li);
+    });
+  });
+}
+
+function populateGroupFriendPick() {
+  const host = $("#groupFriendsPick");
+  const hint = $("#groupFriendsHint");
+  if (!host) return;
+  host.innerHTML = "";
+  api("GET", "/users/friends").then((r) => {
+    const items = r.ok && r.data?.items ? r.data.items : [];
+    if (!items.length) {
+      hint.textContent = "No friends yet — find people and add them first.";
+      return;
+    }
+    hint.textContent = "Select who should be in the group.";
+    const me = jwtSub(getAccess());
+    items.forEach((f) => {
+      if (f.id === me) return;
+      const row = document.createElement("label");
+      row.className = "friend-pick-row";
+      row.innerHTML = `<input type="checkbox" name="groupFriend" value="${escapeHtml(f.id)}" />
+        <span>@${escapeHtml(f.username || "")} · ${escapeHtml(f.email || "")}</span>`;
+      host.appendChild(row);
+    });
+  });
+}
+
+async function populateAddMemberPick() {
+  const host = $("#addMemberPick");
+  if (!host || !activeChatId) return;
+  host.innerHTML = "";
+  const [fr, mem] = await Promise.all([
+    api("GET", "/users/friends"),
+    api("GET", "/chats/" + encodeURIComponent(activeChatId) + "/members"),
+  ]);
+  const friends = fr.ok && fr.data?.items ? fr.data.items : [];
+  const memberIds = new Set(
+    mem.ok && mem.data?.items ? mem.data.items.map((m) => m.user_id) : []
+  );
+  const candidates = friends.filter((f) => !memberIds.has(f.id));
+  if (!candidates.length) {
+    host.innerHTML = `<p class="muted small">Everyone is already in this group or you have no other friends.</p>`;
+    return;
+  }
+  candidates.forEach((f) => {
+    const row = document.createElement("div");
+    row.className = "friend-pick-row";
+    row.style.cursor = "pointer";
+    row.innerHTML = `<span>@${escapeHtml(f.username || "")} · ${escapeHtml(f.email || "")}</span>
+      <button type="button" class="btn primary small">Add</button>`;
+    row.querySelector("button").addEventListener("click", async () => {
+      const r = await api(
+        "POST",
+        "/chats/" + encodeURIComponent(activeChatId) + "/members",
+        { user_id: f.id }
+      );
+      if (!r.ok) alert((r.data && r.data.error) || "Failed");
+      else {
+        closeModals();
+        loadChats();
+      }
+    });
+    host.appendChild(row);
   });
 }
 
@@ -75,12 +267,17 @@ function escapeHtml(s) {
 
 async function openChat(chatId, meta) {
   activeChatId = String(chatId || "").trim();
+  activeChatMeta = meta || null;
   $$(".chat-item").forEach((el) => {
     el.classList.toggle("active", el.dataset.id === chatId);
   });
   $("#threadEmpty").classList.add("hidden");
   $("#threadPanel").classList.remove("hidden");
-  $("#threadTitle").textContent = meta ? chatLabel(meta) : "Chat";
+  let title = meta ? chatLabel(meta) : "Chat";
+  if (meta?.type === "direct" && meta?.name) title = meta.name;
+  if (meta?.type === "direct" && peerLabelCache[activeChatId])
+    title = peerLabelCache[activeChatId];
+  $("#threadTitle").textContent = title;
   $("#threadSubtitle").textContent = chatId;
   messages = [];
   $("#typingBar").classList.add("hidden");
@@ -92,6 +289,23 @@ async function openChat(chatId, meta) {
   );
   if (hist.ok && hist.data?.items) {
     messages = [...hist.data.items].reverse();
+  }
+  const addBtn = $("#btnAddMember");
+  if (addBtn) addBtn.style.display = meta?.type === "group" ? "" : "none";
+
+  if (meta?.type === "direct") {
+    const mm = await api("GET", "/chats/" + encodeURIComponent(chatId) + "/members");
+    if (mm.ok && mm.data?.items) {
+      const me = jwtSub(getAccess());
+      const peer = mm.data.items.find((x) => x.user_id !== me);
+      if (peer?.username) {
+        peerLabelCache[chatId] = peer.username;
+        $("#threadTitle").textContent = peer.username;
+      } else if (peer?.email) {
+        peerLabelCache[chatId] = peer.email;
+        $("#threadTitle").textContent = peer.email;
+      }
+    }
   }
   renderMessages();
   connectWS();
@@ -346,6 +560,7 @@ async function submitRegister(e) {
 function enterApp() {
   showView("main");
   loadMe();
+  loadFriends();
   loadChats();
   startHeartbeat();
 }
@@ -355,6 +570,7 @@ function leaveApp() {
   disconnectWS();
   clearTokens();
   activeChatId = null;
+  activeChatMeta = null;
   messages = [];
   $("#threadPanel").classList.add("hidden");
   $("#threadEmpty").classList.remove("hidden");
@@ -395,37 +611,35 @@ export function init() {
   });
 
   $("#btnOpenSettings").addEventListener("click", () => openModal("modalSettings"));
-  $("#btnOpenNewDirect").addEventListener("click", () => openModal("modalDirect"));
-  $("#btnOpenNewGroup").addEventListener("click", () => openModal("modalGroup"));
+  $("#btnOpenNewDirect").addEventListener("click", () => {
+    $("#directSearchInput").value = "";
+    $("#directSearchResults").innerHTML = "";
+    $("#directSearchHint").textContent = "Start typing to search.";
+    openModal("modalDirect");
+    setTimeout(() => $("#directSearchInput").focus(), 100);
+  });
+  $("#btnOpenNewGroup").addEventListener("click", () => {
+    populateGroupFriendPick();
+    openModal("modalGroup");
+  });
   $("#btnRefreshChats").addEventListener("click", loadChats);
+  $("#btnRefreshFriends").addEventListener("click", loadFriends);
+
+  $("#directSearchInput").addEventListener("input", () => {
+    clearTimeout(directSearchTimer);
+    directSearchTimer = setTimeout(runDirectSearch, 320);
+  });
 
   $$("[data-close-modal]").forEach((el) =>
     el.addEventListener("click", closeModals)
   );
 
-  $("#formDirect").addEventListener("submit", async (e) => {
-    e.preventDefault();
-    const other = $("#directOtherId").value.trim();
-    const r = await api("POST", "/chats", { type: "direct", member_ids: [other] });
-    if (!r.ok) {
-      alert((r.data && r.data.error) || "Could not create chat");
-      return;
-    }
-    closeModals();
-    $("#directOtherId").value = "";
-    await loadChats();
-    if (r.data.id) {
-      await openChat(r.data.id, { id: r.data.id, type: "direct" });
-    }
-  });
-
   $("#formGroup").addEventListener("submit", async (e) => {
     e.preventDefault();
     const name = $("#groupNameInput").value.trim() || "Group";
-    const raw = $("#groupMembersInput").value.trim();
-    const member_ids = raw
-      ? raw.split(",").map((s) => s.trim()).filter(Boolean)
-      : [];
+    const member_ids = $$('#groupFriendsPick input[name="groupFriend"]:checked').map(
+      (inp) => inp.value
+    );
     const r = await api("POST", "/chats", {
       type: "group",
       name,
@@ -437,7 +651,9 @@ export function init() {
     }
     closeModals();
     $("#groupNameInput").value = "";
-    $("#groupMembersInput").value = "";
+    $$('#groupFriendsPick input[type="checkbox"]').forEach((inp) => {
+      inp.checked = false;
+    });
     await loadChats();
     if (r.data.id) {
       await openChat(r.data.id, { id: r.data.id, type: "group", name });
@@ -459,15 +675,12 @@ export function init() {
 
   $("#btnAddMember").addEventListener("click", async () => {
     if (!activeChatId) return;
-    const uid = prompt("User UUID to add");
-    if (!uid) return;
-    const r = await api(
-      "POST",
-      "/chats/" + encodeURIComponent(activeChatId) + "/members",
-      { user_id: uid.trim() }
-    );
-    if (!r.ok) alert((r.data && r.data.error) || "Failed");
-    else loadChats();
+    if (activeChatMeta?.type !== "group") {
+      alert("Add member is only for group chats.");
+      return;
+    }
+    await populateAddMemberPick();
+    openModal("modalAddMember");
   });
 
   $("#btnThreadMenu").addEventListener("click", () => {

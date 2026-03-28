@@ -13,4 +13,6 @@ type ChatMember struct {
 	UserID   string `json:"user_id"`
 	Role     string `json:"role"`
 	JoinedAt string `json:"joined_at,omitempty"`
+	Username string `json:"username,omitempty"`
+	Email    string `json:"email,omitempty"`
 }

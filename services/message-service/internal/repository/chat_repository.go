@@ -8,6 +8,7 @@ import (
 	"realtime-chat-system/services/message-service/internal/model"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -53,6 +54,55 @@ func (r *ChatRepository) CreateChat(ctx context.Context, typ string, name *strin
 		return "", err
 	}
 	return chatID, nil
+}
+
+func (r *ChatRepository) AreFriends(ctx context.Context, a, b string) (bool, error) {
+	if a == b {
+		return false, nil
+	}
+	var ok bool
+	err := r.db.QueryRow(ctx, `
+		SELECT EXISTS(
+			SELECT 1 FROM friendships
+			WHERE user_1 = LEAST($1::uuid, $2::uuid) AND user_2 = GREATEST($1::uuid, $2::uuid)
+		)`, a, b).Scan(&ok)
+	return ok, err
+}
+
+func (r *ChatRepository) findDirectChatID(ctx context.Context, u1, u2 string) (string, error) {
+	var id string
+	err := r.db.QueryRow(ctx, `
+		SELECT c.id::text FROM chats c
+		WHERE c.type = 'direct'
+		AND (SELECT COUNT(*)::int FROM chat_members WHERE chat_id = c.id) = 2
+		AND EXISTS (SELECT 1 FROM chat_members WHERE chat_id = c.id AND user_id = $1::uuid)
+		AND EXISTS (SELECT 1 FROM chat_members WHERE chat_id = c.id AND user_id = $2::uuid)
+		LIMIT 1`, u1, u2).Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	return id, nil
+}
+
+func (r *ChatRepository) GetOrCreateDirectChat(ctx context.Context, me, other string) (chatID string, created bool, err error) {
+	if me == other {
+		return "", false, errors.New("cannot open direct chat with yourself")
+	}
+	existing, err := r.findDirectChatID(ctx, me, other)
+	if err != nil {
+		return "", false, err
+	}
+	if existing != "" {
+		return existing, false, nil
+	}
+	id, err := r.CreateChat(ctx, "direct", nil, me, []string{other})
+	if err != nil {
+		return "", false, err
+	}
+	return id, true, nil
 }
 
 func (r *ChatRepository) IsMember(ctx context.Context, chatID, userID string) (bool, error) {
@@ -104,7 +154,12 @@ func (r *ChatRepository) AddMember(ctx context.Context, chatID, actorID, newUser
 }
 
 func (r *ChatRepository) ListMembers(ctx context.Context, chatID string) ([]model.ChatMember, error) {
-	rows, err := r.db.Query(ctx, `SELECT user_id, role, joined_at::text FROM chat_members WHERE chat_id=$1 ORDER BY joined_at`, chatID)
+	rows, err := r.db.Query(ctx, `
+		SELECT cm.user_id::text, cm.role, cm.joined_at::text, COALESCE(u.username, ''), COALESCE(u.email, '')
+		FROM chat_members cm
+		LEFT JOIN users u ON u.id = cm.user_id
+		WHERE cm.chat_id = $1::uuid
+		ORDER BY cm.joined_at`, chatID)
 	if err != nil {
 		return nil, err
 	}
@@ -112,7 +167,7 @@ func (r *ChatRepository) ListMembers(ctx context.Context, chatID string) ([]mode
 	var out []model.ChatMember
 	for rows.Next() {
 		var m model.ChatMember
-		if err := rows.Scan(&m.UserID, &m.Role, &m.JoinedAt); err != nil {
+		if err := rows.Scan(&m.UserID, &m.Role, &m.JoinedAt, &m.Username, &m.Email); err != nil {
 			return nil, err
 		}
 		out = append(out, m)

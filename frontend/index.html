@@ -76,8 +76,17 @@
         </div>
 
         <div class="new-chat-row">
-          <button type="button" class="btn secondary small" id="btnOpenNewDirect">+ Direct</button>
+          <button type="button" class="btn secondary small" id="btnOpenNewDirect">+ Chat</button>
           <button type="button" class="btn secondary small" id="btnOpenNewGroup">+ Group</button>
+        </div>
+
+        <div class="friends-panel">
+          <div class="friends-head">
+            <span>Friends</span>
+            <button type="button" class="btn icon tiny" id="btnRefreshFriends" title="Refresh friends">↻</button>
+          </div>
+          <ul class="friend-list" id="friendListSidebar"></ul>
+          <p class="friends-empty muted hidden" id="friendsEmpty">No friends yet — use Find people.</p>
         </div>
 
         <ul class="chat-list" id="chatList"></ul>
@@ -87,7 +96,7 @@
         <div class="thread-empty" id="threadEmpty">
           <div class="empty-illu">💬</div>
           <h2>Select a conversation</h2>
-          <p>Start a direct chat or create a group from the sidebar.</p>
+          <p>Use <strong>+ Chat</strong> to find people by email or username, add friends, and open DMs. Groups can include your friends only.</p>
         </div>
 
         <div class="thread-panel hidden" id="threadPanel">
@@ -102,7 +111,7 @@
               <div class="thread-menu-wrap">
                 <button type="button" class="btn icon" id="btnThreadMenu" aria-haspopup="true">⋮</button>
                 <div class="dropdown" id="threadMenu">
-                  <button type="button" id="btnAddMember">Add member (group)</button>
+                  <button type="button" id="btnAddMember">Add friend to group</button>
                 </div>
               </div>
             </div>
@@ -137,33 +146,45 @@
 
   <div class="modal" id="modalDirect">
     <div class="modal-backdrop" data-close-modal></div>
-    <div class="modal-card">
-      <h3>New direct chat</h3>
-      <p class="muted">Other user’s account ID (UUID from their profile).</p>
-      <form id="formDirect">
-        <input type="text" id="directOtherId" class="modal-input" required placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" />
-        <div class="modal-actions">
-          <button type="button" class="btn secondary" data-close-modal>Cancel</button>
-          <button type="submit" class="btn primary">Start chat</button>
-        </div>
-      </form>
+    <div class="modal-card modal-wide">
+      <h3>Find people</h3>
+      <p class="muted">Search by email or username (at least 2 characters). Add them as a friend — your direct chat opens automatically.</p>
+      <input type="search" id="directSearchInput" class="modal-input" autocomplete="off" placeholder="e.g. alex or alex@mail.com" />
+      <p class="muted small" id="directSearchHint">Start typing to search.</p>
+      <ul class="search-results" id="directSearchResults" aria-live="polite"></ul>
+      <div class="modal-actions">
+        <button type="button" class="btn secondary" data-close-modal>Close</button>
+      </div>
     </div>
   </div>
 
   <div class="modal" id="modalGroup">
     <div class="modal-backdrop" data-close-modal></div>
-    <div class="modal-card">
+    <div class="modal-card modal-wide">
       <h3>New group</h3>
       <form id="formGroup">
         <label>Group name</label>
         <input type="text" id="groupNameInput" class="modal-input" placeholder="Team" />
-        <label>Member UUIDs (comma separated)</label>
-        <input type="text" id="groupMembersInput" class="modal-input" placeholder="uuid1, uuid2" />
+        <label>Friends in this group</label>
+        <p class="muted small" id="groupFriendsHint">Add people from Friends first, then select them here.</p>
+        <div class="friend-pick-list" id="groupFriendsPick"></div>
         <div class="modal-actions">
           <button type="button" class="btn secondary" data-close-modal>Cancel</button>
           <button type="submit" class="btn primary">Create</button>
         </div>
       </form>
+    </div>
+  </div>
+
+  <div class="modal" id="modalAddMember">
+    <div class="modal-backdrop" data-close-modal></div>
+    <div class="modal-card modal-wide">
+      <h3>Add to group</h3>
+      <p class="muted">Only friends can be added.</p>
+      <div class="friend-pick-list" id="addMemberPick"></div>
+      <div class="modal-actions">
+        <button type="button" class="btn secondary" data-close-modal>Cancel</button>
+      </div>
     </div>
   </div>
 

@@ -42,6 +42,7 @@ func main() {
 	r.GET("/healthz", func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"status": "ok"}) })
 	r.GET("/metrics", gin.WrapH(promhttp.Handler()))
 	r.GET("/internal/chats/:chat_id/membership", ch.InternalMembership)
+	r.POST("/chats/direct", ch.EnsureDirect)
 	r.POST("/chats", ch.Create)
 	r.GET("/chats", ch.ListMine)
 	r.POST("/chats/:chat_id/members", ch.AddMember)

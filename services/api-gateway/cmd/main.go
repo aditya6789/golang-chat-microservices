@@ -28,6 +28,8 @@ func main() {
 
 	protected := r.Group("/")
 	protected.Use(pkg.AuthRequired(svc))
+	protected.Any("/friends", h.UserProxy)
+	protected.Any("/friends/*path", h.UserProxy)
 	protected.Any("/users/*path", h.UserProxy)
 	protected.Any("/messages", h.MessageProxy)
 	protected.Any("/messages/*path", h.MessageProxy)
