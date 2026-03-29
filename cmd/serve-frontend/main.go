@@ -15,6 +15,6 @@ func main() {
 	if _, err := os.Stat(dir); os.IsNotExist(err) {
 		log.Fatal("run from repo root: frontend/ not found")
 	}
-	log.Printf("test UI: http://127.0.0.1:%s  (API stays on gateway :8080)\n", port)
+	log.Printf("Orbit Chat UI: http://127.0.0.1:%s  (API via gateway :8080)\n", port)
 	log.Fatal(http.ListenAndServe(":"+port, http.FileServer(http.Dir(dir))))
 }

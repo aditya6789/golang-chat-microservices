@@ -612,6 +612,29 @@ code {
   margin-bottom: 0.25rem;
 }
 
+.msg-rcpt {
+  margin-left: 0.35rem;
+  font-size: 0.62rem;
+  letter-spacing: -0.06em;
+  opacity: 0.88;
+  white-space: nowrap;
+}
+
+.msg-rcpt.delivered {
+  color: var(--muted);
+}
+
+.msg-rcpt.read {
+  color: #7dd3fc;
+  opacity: 1;
+}
+
+.msg-rcpt.pending {
+  color: var(--muted);
+  font-style: italic;
+  letter-spacing: 0;
+}
+
 .bubble-text {
   font-size: 0.92rem;
   line-height: 1.45;

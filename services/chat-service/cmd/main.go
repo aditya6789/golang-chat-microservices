@@ -22,6 +22,7 @@ func main() {
 	repo := repository.New(rdb)
 	members := &client.MembershipClient{BaseURL: cfg.MessageServiceURL}
 	hub := service.NewHub(repo, nc, members)
+	hub.StartMessageFanout()
 	h := handler.New(hub, cfg.JWTSecret)
 
 	r := gin.New()

@@ -26,7 +26,7 @@ Message Service is responsible for durable message storage and history retrieval
 - `POST /chats/:chat_id/members` — add member (group only)
 - `GET /chats/:chat_id/members` — list members (must be in chat)
 - `POST /messages` — sender is always `X-User-Id` (body no longer accepts `sender_id`)
-- `GET /messages/:chat_id?limit=20&offset=0` — requires membership
+- `GET /messages/:chat_id?limit=20&offset=0` — requires membership; each item may include `read_by` from `message_receipts`
 
 ## Idempotency
 

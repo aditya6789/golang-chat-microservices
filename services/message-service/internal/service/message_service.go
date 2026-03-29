@@ -30,12 +30,14 @@ func (s *MessageService) Create(ctx context.Context, chatID, senderID, content, 
 	if !ok {
 		return nil, errors.New("forbidden: not a chat member")
 	}
-	m, err := s.repo.Create(ctx, chatID, senderID, content, idem)
+	m, inserted, err := s.repo.Create(ctx, chatID, senderID, content, idem)
 	if err != nil {
 		return nil, err
 	}
-	b, _ := json.Marshal(m)
-	_ = s.nc.Publish("chat.message.created", b)
+	if inserted {
+		b, _ := json.Marshal(m)
+		_ = s.nc.Publish("chat.message.created", b)
+	}
 	return m, nil
 }
 
@@ -47,7 +49,25 @@ func (s *MessageService) History(ctx context.Context, chatID, userID string, lim
 	if !ok {
 		return nil, errors.New("forbidden: not a chat member")
 	}
-	return s.repo.History(ctx, chatID, limit, offset)
+	items, err := s.repo.History(ctx, chatID, limit, offset)
+	if err != nil {
+		return nil, err
+	}
+	if len(items) == 0 {
+		return items, nil
+	}
+	ids := make([]string, len(items))
+	for i := range items {
+		ids[i] = items[i].ID
+	}
+	byMsg, err := s.receipts.ListByMessageIDs(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	for i := range items {
+		items[i].ReadBy = byMsg[items[i].ID]
+	}
+	return items, nil
 }
 
 func (s *MessageService) PersistFromEvent(ctx context.Context, payload []byte) error {
@@ -70,8 +90,15 @@ func (s *MessageService) PersistFromEvent(ctx context.Context, payload []byte) e
 	if !ok {
 		return errors.New("forbidden: not a chat member")
 	}
-	_, err = s.repo.Create(ctx, in.ChatID, in.SenderID, in.Content, in.IdempotencyKey)
-	return err
+	m, inserted, err := s.repo.Create(ctx, in.ChatID, in.SenderID, in.Content, in.IdempotencyKey)
+	if err != nil {
+		return err
+	}
+	if inserted {
+		b, _ := json.Marshal(m)
+		_ = s.nc.Publish("chat.message.created", b)
+	}
+	return nil
 }
 
 func (s *MessageService) PersistReceiptFromEvent(ctx context.Context, payload []byte) error {

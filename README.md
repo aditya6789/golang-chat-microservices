@@ -50,18 +50,18 @@ I structured it this way to practice how a real chat product splits **auth**, **
 | **Persistence** | Messages and read receipts via **NATS** consumers in `message-service` |
 | **Social** | Search users by **email / username**; **friends**; **direct chats** only between friends; **groups** only with friends (and add-member restricted to friends) |
 | **Gateway** | Single entrypoint, **JWT validation**, **`X-User-Id` / `X-Request-Id`** injection, **rate limiting**, **CORS** for browser clients |
-| **UI** | **Orbit Chat** static SPA + `go run ./cmd/serve-frontend` (settings: gateway base URL) |
+| **UI** | **Orbit Chat** static SPA + `go run ./cmd/serve-frontend` (settings: gateway base URL); **read receipts** (delivered ✓ / read ✓✓) synced from `message_receipts` + WebSocket |
 | **Ops** | **Docker Compose** for all infra + services; **`/healthz`** and **Prometheus-style `/metrics`** on services |
 
 ---
 
 ## Future ideas
 
-None of the following exists in the codebase yet—it is just a **personal backlog** of things I might build next. They extend what I already have (Go services, Postgres, Redis, NATS, WebSockets today; WebRTC later for realtime media).
+Most of the following is still a **personal backlog**; a few items (e.g. read receipts in the UI) are implemented and called out inline. They extend what I already have (Go services, Postgres, Redis, NATS, WebSockets today; WebRTC later for realtime media).
 
 ### Chat and UX
 
-- **Read receipts in the UI** — I already persist `message_receipts`; I still want to show delivered/read in Orbit Chat.
+- ~~**Read receipts in the UI**~~ — **Done:** Orbit Chat shows delivered/read on your own bubbles; history includes `read_by` from `message_receipts`; `read_receipt` events over the WebSocket update peers live.
 - **Reply threading** — `reply_to_message_id`, quoted bubbles, stable ordering.
 - **Reactions** — emoji per message, pushed over the WebSocket.
 - **Edit and delete** — soft delete, `edited_at`, realtime sync to other clients.
@@ -113,7 +113,7 @@ None of the following exists in the codebase yet—it is just a **personal backl
 - **E2E** — Playwright (or similar) against Compose: sign up → friend → DM → send.
 - **Swagger UI** — tiny page over the existing `docs/swagger.yaml`.
 
-**What I will probably pick up first:** read receipts in the UI, then reply threading, then CI, then presigned uploads, then friend requests—roughly in that order.
+**What I will probably pick up first:** reply threading, then CI, then presigned uploads, then friend requests—roughly in that order.
 
 ---
 

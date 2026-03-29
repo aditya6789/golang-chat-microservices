@@ -55,8 +55,12 @@ func (h *Hub) HandleInbound(ctx context.Context, e model.Event) error {
 		return errors.New("forbidden")
 	}
 	e.At = time.Now().UTC()
-	if err := h.repo.Publish(ctx, e.ChatID, e); err != nil {
-		return err
+	// Chat messages are fan-out only after Postgres persist (chat.message.created → Redis)
+	// so every client sees a stable message_id for read receipts.
+	if e.Type != "message" {
+		if err := h.repo.Publish(ctx, e.ChatID, e); err != nil {
+			return err
+		}
 	}
 	if e.Type == "message" {
 		idem := "ws:" + uuid.NewString()
@@ -67,6 +71,7 @@ func (h *Hub) HandleInbound(ctx context.Context, e model.Event) error {
 			IdempotencyKey string `json:"idempotency_key"`
 		}{ChatID: e.ChatID, SenderID: e.SenderID, Content: e.Content, IdempotencyKey: idem})
 		_ = h.nc.Publish("chat.message.persist", b)
+		return nil
 	}
 	if e.Type == "read_receipt" && e.MessageID != "" {
 		b, _ := json.Marshal(struct {
@@ -77,6 +82,35 @@ func (h *Hub) HandleInbound(ctx context.Context, e model.Event) error {
 		_ = h.nc.Publish("chat.receipt.persist", b)
 	}
 	return nil
+}
+
+// StartMessageFanout subscribes to durable message creates and publishes to Redis for WebSocket clients.
+func (h *Hub) StartMessageFanout() {
+	_, _ = h.nc.Subscribe("chat.message.created", func(msg *nats.Msg) {
+		var m struct {
+			ID        string    `json:"id"`
+			ChatID    string    `json:"chat_id"`
+			SenderID  string    `json:"sender_id"`
+			Content   string    `json:"content"`
+			CreatedAt time.Time `json:"created_at"`
+		}
+		if err := json.Unmarshal(msg.Data, &m); err != nil || m.ID == "" || m.ChatID == "" {
+			return
+		}
+		at := m.CreatedAt
+		if at.IsZero() {
+			at = time.Now().UTC()
+		}
+		e := model.Event{
+			Type:      "message",
+			ChatID:    m.ChatID,
+			SenderID:  m.SenderID,
+			Content:   m.Content,
+			MessageID: m.ID,
+			At:        at.UTC(),
+		}
+		_ = h.repo.Publish(context.Background(), m.ChatID, e)
+	})
 }
 
 func (h *Hub) StreamChat(ctx context.Context, connKey, chatID string) {

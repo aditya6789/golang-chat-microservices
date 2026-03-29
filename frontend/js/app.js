@@ -14,7 +14,10 @@ let socket = null;
 let activeChatId = null;
 /** @type {{ type?: string, name?: string } | null} */
 let activeChatMeta = null;
-/** @type {Array<{id?: string, sender_id: string, content: string, created_at?: string, _ts?: number}>} */
+/** @type {string | null} other participant in active direct chat (for read ticks) */
+let directPeerUserId = null;
+
+/** @type {Array<{id?: string, sender_id: string, content: string, created_at?: string, _ts?: number, _pending?: boolean, read_by?: Array<{user_id: string, read_at?: string}>}>} */
 let messages = [];
 let typingClearTimer = null;
 let heartbeatTimer = null;
@@ -46,6 +49,35 @@ function fmtTime(iso) {
     return d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
   } catch {
     return "";
+  }
+}
+
+/** Receipt ticks for outgoing bubbles only (HTML). */
+function receiptMarkup(m) {
+  const me = jwtSub(getAccess());
+  if (m._pending || !m.id || String(m.id).startsWith("pending-")) {
+    return ` <span class="msg-rcpt pending" title="Sending">…</span>`;
+  }
+  const others = (m.read_by || []).filter((r) => r.user_id && r.user_id !== me);
+  const isDirect = activeChatMeta?.type === "direct";
+  const read =
+    isDirect && directPeerUserId
+      ? others.some((r) => r.user_id === directPeerUserId)
+      : others.length > 0;
+  const title = read ? "Read" : "Delivered";
+  const sym = read ? "✓✓" : "✓";
+  const cls = read ? "msg-rcpt read" : "msg-rcpt delivered";
+  return ` <span class="${cls}" title="${escapeHtml(title)}">${sym}</span>`;
+}
+
+function acknowledgePeerReads() {
+  if (!socket || socket.readyState !== WebSocket.OPEN) return;
+  const me = jwtSub(getAccess());
+  for (const m of messages) {
+    if (m.sender_id === me || !m.id || String(m.id).startsWith("pending-")) continue;
+    try {
+      socket.send(JSON.stringify({ type: "read_receipt", message_id: m.id }));
+    } catch (_) {}
   }
 }
 
@@ -268,6 +300,7 @@ function escapeHtml(s) {
 async function openChat(chatId, meta) {
   activeChatId = String(chatId || "").trim();
   activeChatMeta = meta || null;
+  directPeerUserId = null;
   $$(".chat-item").forEach((el) => {
     el.classList.toggle("active", el.dataset.id === chatId);
   });
@@ -298,6 +331,7 @@ async function openChat(chatId, meta) {
     if (mm.ok && mm.data?.items) {
       const me = jwtSub(getAccess());
       const peer = mm.data.items.find((x) => x.user_id !== me);
+      if (peer?.user_id) directPeerUserId = peer.user_id;
       if (peer?.username) {
         peerLabelCache[chatId] = peer.username;
         $("#threadTitle").textContent = peer.username;
@@ -320,9 +354,10 @@ function renderMessages() {
     const div = document.createElement("div");
     div.className = "bubble-row " + (mine ? "mine" : "theirs");
     const t = m.created_at ? fmtTime(m.created_at) : "";
+    const rcpt = mine ? receiptMarkup(m) : "";
     div.innerHTML = `
       <div class="bubble">
-        <div class="bubble-meta">${mine ? "You" : escapeHtml((m.sender_id || "").slice(0, 8) + "…")} · ${t}</div>
+        <div class="bubble-meta">${mine ? "You" : escapeHtml((m.sender_id || "").slice(0, 8) + "…")} · ${t}${rcpt}</div>
         <div class="bubble-text">${escapeHtml(m.content || "")}</div>
       </div>`;
     box.appendChild(div);
@@ -332,14 +367,30 @@ function renderMessages() {
 
 function pushMessage(m) {
   const me = jwtSub(getAccess());
-  if (m.message_id && messages.some((x) => x.id === m.message_id)) return;
-  if (
-    m.id &&
-    messages.some((x) => x.id === m.id)
-  )
-    return;
+  const realId = m.message_id || m.id;
   const content = m.content || "";
   const sender = m.sender_id || "";
+
+  if (realId && sender === me) {
+    const pi = messages.findIndex(
+      (x) => x._pending && x.sender_id === sender && x.content === content
+    );
+    if (pi >= 0) {
+      messages[pi] = {
+        id: realId,
+        sender_id: sender,
+        content,
+        created_at: m.at || m.created_at || messages[pi].created_at,
+        _ts: m.at ? new Date(m.at).getTime() : Date.now(),
+        read_by: m.read_by || messages[pi].read_by || [],
+      };
+      renderMessages();
+      return;
+    }
+  }
+
+  if (realId && messages.some((x) => x.id === realId)) return;
+
   const recent = messages.slice(-5);
   const dup = recent.some(
     (x) =>
@@ -350,13 +401,24 @@ function pushMessage(m) {
   if (dup) return;
 
   messages.push({
-    id: m.message_id || m.id,
+    id: realId,
     sender_id: sender,
     content,
-    created_at: m.at || new Date().toISOString(),
+    created_at: m.at || m.created_at || new Date().toISOString(),
     _ts: m.at ? new Date(m.at).getTime() : Date.now(),
+    read_by: m.read_by || [],
   });
   renderMessages();
+
+  if (sender && sender !== me && realId) {
+    queueMicrotask(() => {
+      if (socket?.readyState === WebSocket.OPEN) {
+        try {
+          socket.send(JSON.stringify({ type: "read_receipt", message_id: realId }));
+        } catch (_) {}
+      }
+    });
+  }
 }
 
 function connectWS() {
@@ -367,6 +429,7 @@ function connectWS() {
   $("#wsDot").className = "ws-dot connecting";
   socket.onopen = () => {
     $("#wsDot").className = "ws-dot on";
+    acknowledgePeerReads();
   };
   socket.onclose = () => {
     $("#wsDot").className = "ws-dot off";
@@ -405,7 +468,21 @@ function connectWS() {
       return;
     }
     if (p.type === "read_receipt") {
-      /* optional: could show read ticks later */
+      const mid = p.message_id;
+      const reader = p.sender_id;
+      if (!mid || !reader) return;
+      const meSub = jwtSub(getAccess());
+      const msg = messages.find((x) => x.id === mid);
+      if (!msg || msg.sender_id !== meSub) return;
+      if (!msg.read_by) msg.read_by = [];
+      if (!msg.read_by.some((r) => r.user_id === reader)) {
+        msg.read_by.push({
+          user_id: reader,
+          read_at: p.at || new Date().toISOString(),
+        });
+        renderMessages();
+      }
+      return;
     }
   };
 }
@@ -428,6 +505,18 @@ async function sendText() {
 
   const payload = JSON.stringify({ type: "message", content: text });
   if (socket && socket.readyState === WebSocket.OPEN) {
+    const me = jwtSub(getAccess());
+    const pendingId =
+      "pending-" + (globalThis.crypto?.randomUUID?.() || String(Date.now()));
+    messages.push({
+      id: pendingId,
+      sender_id: me,
+      content: text,
+      created_at: new Date().toISOString(),
+      _pending: true,
+      read_by: [],
+    });
+    renderMessages();
     socket.send(payload);
     return;
   }
@@ -445,6 +534,7 @@ async function sendText() {
       sender_id: r.data.sender_id,
       content: r.data.content,
       created_at: r.data.created_at,
+      read_by: r.data.read_by || [],
     });
     renderMessages();
   }
@@ -571,6 +661,7 @@ function leaveApp() {
   clearTokens();
   activeChatId = null;
   activeChatMeta = null;
+  directPeerUserId = null;
   messages = [];
   $("#threadPanel").classList.add("hidden");
   $("#threadEmpty").classList.remove("hidden");
