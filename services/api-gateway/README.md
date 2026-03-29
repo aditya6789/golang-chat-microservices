@@ -5,7 +5,7 @@ API Gateway is the single entry point for clients. It routes requests to downstr
 ## Responsibilities
 
 - Route `/auth/*` requests to `auth-service`
-- Route protected traffic (`/users/*`, `/messages/*`, `/chat/*`, `/ws`) to corresponding services
+- Route protected traffic (`/users/*`, `/messages/*`, `/chat/*`, `/ws`, `/ws/signaling`) to corresponding services
 - Validate JWT by calling `auth-service /auth/validate`
 - Apply rate limiting middleware
 - Expose health and metrics endpoints
@@ -27,7 +27,7 @@ API Gateway is the single entry point for clients. It routes requests to downstr
 - `ANY /messages` and `ANY /messages/*path` (protected)
 - `ANY /chats` and `ANY /chats/*path` (protected)
 - `ANY /chat/*path` (protected)
-- `ANY /ws` (protected proxy to chat-service websocket endpoint)
+- `ANY /ws` and `ANY /ws/signaling` (protected proxy to chat-service WebSocket endpoints: chat and WebRTC signaling)
 
 On protected routes, the gateway validates JWT then sets **`X-User-Id`** (JWT `sub`) and **`X-Request-Id`** on the outbound proxied request.
 

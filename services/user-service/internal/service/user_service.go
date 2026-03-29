@@ -66,6 +66,10 @@ func (s *UserService) AddFriend(ctx context.Context, selfID, otherID string) err
 	return s.repo.AddFriendship(ctx, selfID, otherID)
 }
 
+func (s *UserService) AreFriends(ctx context.Context, a, b string) (bool, error) {
+	return s.repo.AreFriends(ctx, a, b)
+}
+
 func (s *UserService) ListFriends(ctx context.Context, userID string) ([]model.UserProfile, error) {
 	list, err := s.repo.ListFriends(ctx, userID)
 	if err != nil {

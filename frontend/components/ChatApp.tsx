@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   api,
   clearTokens,
@@ -9,8 +9,64 @@ import {
   jwtSub,
   setBase,
   setTokens,
+  signalingURL,
   wsURL,
 } from "@/lib/api";
+import {
+  VoiceCallManager,
+  type VoiceEndReason,
+  type VoicePhase,
+} from "@/lib/voiceCall";
+
+function fmtVoiceDuration(ms: number): string {
+  if (ms < 0 || !Number.isFinite(ms)) return "0:00";
+  const s = Math.floor(ms / 1000);
+  const m = Math.floor(s / 60);
+  const sec = s % 60;
+  const h = Math.floor(m / 60);
+  if (h > 0) {
+    return `${h}:${(m % 60).toString().padStart(2, "0")}:${sec.toString().padStart(2, "0")}`;
+  }
+  return `${m}:${sec.toString().padStart(2, "0")}`;
+}
+
+function voiceCallStatusLine(phase: VoicePhase, muted: boolean, video: boolean): string {
+  const v = video ? "Video · " : "";
+  switch (phase) {
+    case "incoming":
+      return `${v}Incoming call`;
+    case "outgoing":
+      return `${v}Ringing…`;
+    case "connecting":
+      return `${v}Connecting…`;
+    case "active":
+      if (video) {
+        return muted ? "Video call · Mic muted" : "Video call";
+      }
+      return muted ? "In call · Mic muted" : "In call";
+    default:
+      return "";
+  }
+}
+
+function voiceCallEndLine(reason: VoiceEndReason): string {
+  switch (reason) {
+    case "you_ended":
+      return "You ended the call";
+    case "peer_ended":
+      return "Call ended";
+    case "peer_declined":
+      return "Call declined";
+    case "declined_incoming":
+      return "You declined";
+    case "failed":
+      return "Connection failed";
+    case "error":
+      return "Call error";
+    default:
+      return "Call ended";
+  }
+}
 
 type ChatMeta = { id?: string; type?: string; name?: string };
 type Friend = { id: string; username?: string; email?: string };
@@ -264,7 +320,25 @@ export default function ChatApp() {
 
   const [addMemberCandidates, setAddMemberCandidates] = useState<Friend[]>([]);
 
+  const [voicePhase, setVoicePhase] = useState<VoicePhase>("idle");
+  const [voicePeerLabel, setVoicePeerLabel] = useState("");
+  const [voiceMuted, setVoiceMuted] = useState(false);
+  const [voiceToast, setVoiceToast] = useState("");
+  const [voiceCallEndedReason, setVoiceCallEndedReason] = useState<VoiceEndReason | null>(null);
+  const [voiceEndedDurationSnapshot, setVoiceEndedDurationSnapshot] = useState<string | null>(null);
+  const [voiceTimerTick, setVoiceTimerTick] = useState(0);
+  const [callVideoMode, setCallVideoMode] = useState(false);
+  const [voiceCameraOff, setVoiceCameraOff] = useState(false);
+  const voiceRingStartRef = useRef<number | null>(null);
+  const voiceActiveStartRef = useRef<number | null>(null);
+  const voiceEndedDismissTimerRef = useRef<number | null>(null);
+
   const peerLabelCacheRef = useRef<Record<string, string>>({});
+  const signalingRef = useRef<WebSocket | null>(null);
+  const voiceRef = useRef<VoiceCallManager | null>(null);
+  const remoteAudioRef = useRef<HTMLAudioElement | null>(null);
+  const remoteVideoRef = useRef<HTMLVideoElement | null>(null);
+  const localVideoRef = useRef<HTMLVideoElement | null>(null);
   const socketRef = useRef<WebSocket | null>(null);
   const typingClearTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const heartbeatTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -294,6 +368,186 @@ export default function ChatApp() {
     }
     setWsStatus("off");
   }, []);
+
+  const friendsRef = useRef(friends);
+  useEffect(() => {
+    friendsRef.current = friends;
+  }, [friends]);
+
+  const disconnectSignaling = useCallback(() => {
+    if (voiceEndedDismissTimerRef.current) {
+      clearTimeout(voiceEndedDismissTimerRef.current);
+      voiceEndedDismissTimerRef.current = null;
+    }
+    voiceRef.current?.endCall();
+    voiceRef.current = null;
+    const sig = signalingRef.current;
+    if (sig) {
+      try {
+        sig.close();
+      } catch {
+        /* ignore */
+      }
+      signalingRef.current = null;
+    }
+    voiceRingStartRef.current = null;
+    voiceActiveStartRef.current = null;
+    setVoicePhase((p) => (p === "idle" ? p : "idle"));
+    setVoicePeerLabel((l) => (l === "" ? l : ""));
+    setVoiceMuted((m) => (m === false ? m : false));
+    setCallVideoMode(false);
+    setVoiceCameraOff(false);
+    const ra = remoteAudioRef.current;
+    if (ra?.srcObject) ra.srcObject = null;
+    const rv = remoteVideoRef.current;
+    if (rv?.srcObject) rv.srcObject = null;
+    const lv = localVideoRef.current;
+    if (lv?.srcObject) lv.srcObject = null;
+  }, []);
+
+  useEffect(() => {
+    if (view !== "main" || !jwtSub(getAccess())) {
+      return;
+    }
+    try {
+      voiceRef.current = new VoiceCallManager(
+        (o) => {
+          const ws = signalingRef.current;
+          if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify(o));
+        },
+        (stream) => {
+          const vEl = remoteVideoRef.current;
+          const aEl = remoteAudioRef.current;
+          if (!stream) {
+            if (vEl) vEl.srcObject = null;
+            if (aEl) aEl.srcObject = null;
+            return;
+          }
+          const hasVideo = stream.getVideoTracks().length > 0;
+          if (hasVideo && vEl) {
+            vEl.srcObject = stream;
+            void vEl.play().catch(() => {});
+            if (aEl) aEl.srcObject = null;
+          } else if (aEl) {
+            aEl.srcObject = stream;
+            if (vEl) vEl.srcObject = null;
+          }
+        },
+        (phase, d) => {
+          if (phase === "idle") {
+            setVoicePhase("idle");
+            if (d?.endReason) {
+              const now = Date.now();
+              let snap = "0:00";
+              if (voiceActiveStartRef.current != null) {
+                snap = fmtVoiceDuration(now - voiceActiveStartRef.current);
+              } else if (voiceRingStartRef.current != null) {
+                snap = fmtVoiceDuration(now - voiceRingStartRef.current);
+              }
+              setVoiceEndedDurationSnapshot(snap);
+              setVoiceCallEndedReason(d.endReason);
+              if (voiceEndedDismissTimerRef.current) {
+                clearTimeout(voiceEndedDismissTimerRef.current);
+              }
+              voiceEndedDismissTimerRef.current = window.setTimeout(() => {
+                voiceEndedDismissTimerRef.current = null;
+                setVoiceCallEndedReason(null);
+                setVoiceEndedDurationSnapshot(null);
+                setVoicePeerLabel("");
+              }, 4500);
+            } else {
+              setVoiceCallEndedReason(null);
+              setVoiceEndedDurationSnapshot(null);
+              setVoicePeerLabel("");
+            }
+            voiceRingStartRef.current = null;
+            voiceActiveStartRef.current = null;
+            setCallVideoMode(false);
+            setVoiceCameraOff(false);
+            return;
+          }
+          setVoicePhase(phase);
+          setVoiceCallEndedReason(null);
+          setVoiceEndedDurationSnapshot(null);
+          setCallVideoMode(!!d?.video);
+          setVoiceCameraOff(false);
+          const pid = d?.peerId;
+          if (d?.peerLabel) {
+            setVoicePeerLabel(d.peerLabel);
+          } else if (pid) {
+            const f = friendsRef.current.find((x) => x.id === pid);
+            setVoicePeerLabel(f?.username || f?.email || pid.slice(0, 8));
+          }
+          if (phase === "outgoing" || phase === "incoming") {
+            voiceRingStartRef.current = Date.now();
+            voiceActiveStartRef.current = null;
+          }
+          if (phase === "active") {
+            voiceActiveStartRef.current = Date.now();
+          }
+        },
+        (msg) => {
+          setVoiceToast(msg);
+          window.setTimeout(() => setVoiceToast(""), 5000);
+        },
+        (local) => {
+          const el = localVideoRef.current;
+          if (el) el.srcObject = local;
+          if (local) void el?.play().catch(() => {});
+        }
+      );
+      const ws = new WebSocket(signalingURL());
+      signalingRef.current = ws;
+      ws.onmessage = (ev) => {
+        let p: Record<string, unknown>;
+        try {
+          p = JSON.parse(ev.data as string);
+        } catch {
+          return;
+        }
+        void voiceRef.current?.handleSignal(p);
+      };
+      ws.onclose = () => {
+        if (signalingRef.current === ws) signalingRef.current = null;
+      };
+    } catch (err) {
+      console.error("signaling init failed", err);
+      disconnectSignaling();
+      setVoiceToast("Voice signaling unavailable (check API base URL in Settings)");
+      window.setTimeout(() => setVoiceToast(""), 6000);
+    }
+    return () => {
+      disconnectSignaling();
+    };
+  }, [view, disconnectSignaling]);
+
+  useEffect(() => {
+    voiceRef.current?.setMuted(voiceMuted);
+  }, [voiceMuted]);
+
+  useEffect(() => {
+    voiceRef.current?.setCameraEnabled(!voiceCameraOff);
+  }, [voiceCameraOff]);
+
+  /** Attach local camera to PiP when the video element mounts after the stream exists. */
+  useEffect(() => {
+    if (!callVideoMode || voicePhase === "idle") return;
+    const id = window.setInterval(() => {
+      const el = localVideoRef.current;
+      const s = voiceRef.current?.getLocalStream();
+      if (el && s && el.srcObject !== s) {
+        el.srcObject = s;
+        void el.play().catch(() => {});
+      }
+    }, 400);
+    return () => clearInterval(id);
+  }, [callVideoMode, voicePhase]);
+
+  useEffect(() => {
+    if (voicePhase === "idle" && !voiceCallEndedReason) return;
+    const id = window.setInterval(() => setVoiceTimerTick((n) => n + 1), 1000);
+    return () => clearInterval(id);
+  }, [voicePhase, voiceCallEndedReason]);
 
   const mergeReactionEvent = useCallback((p: Record<string, unknown>) => {
     const mid = p.message_id as string;
@@ -546,6 +800,11 @@ export default function ChatApp() {
       return;
     }
     setFriends(data.items);
+  }, []);
+
+  const startCall = useCallback((peerId: string, label: string, video = false) => {
+    setVoicePeerLabel(label);
+    void voiceRef.current?.startOutgoing(peerId, label, video);
   }, []);
 
   const closeModals = useCallback(() => {
@@ -989,6 +1248,7 @@ export default function ChatApp() {
   const leaveApp = useCallback(() => {
     stopHeartbeat();
     disconnectWS();
+    disconnectSignaling();
     clearTokens();
     setActiveChatId(null);
     setActiveChatMeta(null);
@@ -997,8 +1257,12 @@ export default function ChatApp() {
     setMessages([]);
     setShowThread(false);
     setSidebarOpen(false);
+    setVoiceCallEndedReason(null);
+    setVoiceEndedDurationSnapshot(null);
+    setVoicePeerLabel("");
+    setVoiceMuted(false);
     setView("auth");
-  }, [disconnectWS, stopHeartbeat]);
+  }, [disconnectWS, disconnectSignaling, stopHeartbeat]);
 
   useEffect(() => {
     setApiBaseField(getBase());
@@ -1026,7 +1290,11 @@ export default function ChatApp() {
       );
       return;
     }
-    setTokens(d.access_token!, d.refresh_token!);
+    if (!d.access_token) {
+      setAuthError("Invalid login response from server");
+      return;
+    }
+    setTokens(d.access_token, d.refresh_token || "");
     setAuthError("");
     enterApp();
   };
@@ -1049,7 +1317,11 @@ export default function ChatApp() {
       );
       return;
     }
-    setTokens(d.access_token!, d.refresh_token!);
+    if (!d.access_token) {
+      setAuthError("Invalid register response from server");
+      return;
+    }
+    setTokens(d.access_token, d.refresh_token || "");
     setAuthError("");
     enterApp();
   };
@@ -1072,6 +1344,27 @@ export default function ChatApp() {
   }, []);
 
   const meSub = jwtSub(getAccess());
+
+  const voiceDurationLabel = useMemo(() => {
+    const now = Date.now();
+    if (voicePhase === "active" && voiceActiveStartRef.current != null) {
+      return fmtVoiceDuration(now - voiceActiveStartRef.current);
+    }
+    if (
+      (voicePhase === "outgoing" ||
+        voicePhase === "incoming" ||
+        voicePhase === "connecting") &&
+      voiceRingStartRef.current != null
+    ) {
+      return fmtVoiceDuration(now - voiceRingStartRef.current);
+    }
+    return "0:00";
+  }, [voicePhase, voiceTimerTick]);
+
+  const showVoiceCallOverlay =
+    voicePhase !== "idle" || voiceCallEndedReason !== null;
+  const voicePeerInitial =
+    (voicePeerLabel || "?").trim().slice(0, 1).toUpperCase() || "?";
 
   const receiptMarkup = (m: Message) => {
     if (m._pending || !m.id || String(m.id).startsWith("pending-")) {
@@ -1227,6 +1520,158 @@ export default function ChatApp() {
       </div>
 
       <div className={view === "main" ? "view" : "view hidden"} data-view="main">
+        <audio ref={remoteAudioRef} autoPlay playsInline className="hidden" aria-hidden />
+        {voiceToast ? (
+          <div className="voice-toast" role="status">
+            {voiceToast}
+          </div>
+        ) : null}
+        {showVoiceCallOverlay ? (
+          <div
+            className="voice-modal-backdrop"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Voice call"
+          >
+            <div className="voice-modal voice-modal-lg">
+              {callVideoMode && !voiceCallEndedReason ? (
+                <div className="voice-call-video-stage">
+                  <video
+                    ref={remoteVideoRef}
+                    className="voice-remote-video"
+                    autoPlay
+                    playsInline
+                  />
+                  <video
+                    ref={localVideoRef}
+                    className="voice-local-pip"
+                    autoPlay
+                    playsInline
+                    muted
+                  />
+                </div>
+              ) : null}
+              <div className="voice-call-hero">
+                {!callVideoMode || voiceCallEndedReason ? (
+                  <div className="voice-avatar-xl" aria-hidden>
+                    {voicePeerInitial}
+                  </div>
+                ) : null}
+                <h2 className="voice-call-name">{voicePeerLabel || "Unknown"}</h2>
+                {voiceCallEndedReason ? (
+                  <>
+                    <p className="voice-call-status voice-call-status-ended">
+                      {voiceCallEndLine(voiceCallEndedReason)}
+                    </p>
+                    <p className="voice-call-timer-label">Duration</p>
+                    <p className="voice-call-timer voice-call-timer-muted">
+                      {voiceEndedDurationSnapshot ?? voiceDurationLabel}
+                    </p>
+                    <div className="voice-modal-actions voice-modal-actions-center">
+                      <button
+                        type="button"
+                        className="btn primary"
+                        onClick={() => {
+                          if (voiceEndedDismissTimerRef.current) {
+                            clearTimeout(voiceEndedDismissTimerRef.current);
+                            voiceEndedDismissTimerRef.current = null;
+                          }
+                          setVoiceCallEndedReason(null);
+                          setVoiceEndedDurationSnapshot(null);
+                          setVoicePeerLabel("");
+                        }}
+                      >
+                        Dismiss
+                      </button>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <p className="voice-call-status">
+                      {voiceCallStatusLine(voicePhase, voiceMuted, callVideoMode)}
+                    </p>
+                    <p className="voice-call-timer-label">
+                      {voicePhase === "active" ? "Call duration" : "Time"}
+                    </p>
+                    <p className="voice-call-timer">{voiceDurationLabel}</p>
+                    <div className="voice-modal-actions voice-modal-actions-spread">
+                      {voicePhase === "incoming" ? (
+                        <>
+                          <button
+                            type="button"
+                            className="btn voice-btn-decline"
+                            onClick={() => {
+                              const m = voiceRef.current?.getPendingIncoming();
+                              if (m) voiceRef.current?.rejectIncoming(m.callId, m.peerId);
+                            }}
+                          >
+                            Decline
+                          </button>
+                          <button
+                            type="button"
+                            className="btn voice-btn-accept"
+                            onClick={() => {
+                              const m = voiceRef.current?.getPendingIncoming();
+                              if (m) {
+                                void voiceRef.current?.acceptIncoming(
+                                  m.callId,
+                                  m.peerId,
+                                  voicePeerLabel
+                                );
+                              }
+                            }}
+                          >
+                            Accept
+                          </button>
+                        </>
+                      ) : null}
+                      {voicePhase === "outgoing" || voicePhase === "connecting" ? (
+                        <button
+                          type="button"
+                          className="btn voice-btn-end wide"
+                          onClick={() => voiceRef.current?.endCall()}
+                        >
+                          End call
+                        </button>
+                      ) : null}
+                      {voicePhase === "active" ? (
+                        <>
+                          <button
+                            type="button"
+                            className={
+                              "btn voice-btn-mute" + (voiceMuted ? " muted-on" : "")
+                            }
+                            onClick={() => setVoiceMuted((m) => !m)}
+                          >
+                            {voiceMuted ? "Unmute" : "Mute"}
+                          </button>
+                          {callVideoMode ? (
+                            <button
+                              type="button"
+                              className={
+                                "btn voice-btn-mute" + (voiceCameraOff ? " muted-on" : "")
+                              }
+                              onClick={() => setVoiceCameraOff((v) => !v)}
+                            >
+                              {voiceCameraOff ? "Cam on" : "Cam off"}
+                            </button>
+                          ) : null}
+                          <button
+                            type="button"
+                            className="btn voice-btn-end"
+                            onClick={() => voiceRef.current?.endCall()}
+                          >
+                            End
+                          </button>
+                        </>
+                      ) : null}
+                    </div>
+                  </>
+                )}
+              </div>
+            </div>
+          </div>
+        ) : null}
         <div className="app-shell">
           <button
             type="button"
@@ -1322,13 +1767,31 @@ export default function ChatApp() {
                         <strong>{f.username || "User"}</strong>
                         <span>{f.email || ""}</span>
                       </div>
-                      <button
-                        type="button"
-                        className="btn secondary small"
-                        onClick={() => void openDirectWithFriend(f.id, label)}
-                      >
-                        Message
-                      </button>
+                      <div className="friend-actions">
+                        <button
+                          type="button"
+                          className="btn secondary small"
+                          title="Voice call"
+                          onClick={() => startCall(f.id, label, false)}
+                        >
+                          Call
+                        </button>
+                        <button
+                          type="button"
+                          className="btn secondary small"
+                          title="Video call"
+                          onClick={() => startCall(f.id, label, true)}
+                        >
+                          Video
+                        </button>
+                        <button
+                          type="button"
+                          className="btn secondary small"
+                          onClick={() => void openDirectWithFriend(f.id, label)}
+                        >
+                          Message
+                        </button>
+                      </div>
                     </li>
                   );
                 })}
@@ -1391,6 +1854,30 @@ export default function ChatApp() {
                   </p>
                 </div>
                 <div className="thread-header-right">
+                  {directPeerUserId && activeChatMeta?.type === "direct" ? (
+                    <>
+                      <button
+                        type="button"
+                        className="btn secondary small thread-call-btn"
+                        title="Voice call"
+                        onClick={() =>
+                          startCall(directPeerUserId, threadTitle || "Friend", false)
+                        }
+                      >
+                        Call
+                      </button>
+                      <button
+                        type="button"
+                        className="btn secondary small thread-call-btn"
+                        title="Video call"
+                        onClick={() =>
+                          startCall(directPeerUserId, threadTitle || "Friend", true)
+                        }
+                      >
+                        Video
+                      </button>
+                    </>
+                  ) : null}
                   <span
                     className={"ws-dot " + wsStatus}
                     title="Realtime connection"

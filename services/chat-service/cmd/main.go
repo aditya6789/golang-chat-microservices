@@ -21,16 +21,20 @@ func main() {
 	nc, _ := infra.NewNATS()
 	repo := repository.New(rdb)
 	members := &client.MembershipClient{BaseURL: cfg.MessageServiceURL}
+	friends := &client.FriendshipClient{BaseURL: cfg.UserServiceURL}
 	hub := service.NewHub(repo, nc, members)
 	hub.StartMessageFanout()
 	hub.StartReactionFanout()
+	signalingHub := service.NewSignalingHub()
 	h := handler.New(hub, cfg.JWTSecret)
+	sh := handler.NewSignaling(signalingHub, friends, cfg.JWTSecret)
 
 	r := gin.New()
 	r.Use(gin.Recovery(), gin.Logger(), httpx.ErrorMiddleware())
 	r.GET("/healthz", func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"status": "ok"}) })
 	r.GET("/metrics", gin.WrapH(promhttp.Handler()))
 	r.GET("/ws", h.Connect)
+	r.GET("/ws/signaling", sh.Connect)
 	_ = r.Run(":" + cfg.Port)
 }
 

@@ -76,6 +76,20 @@ func (r *UserRepository) AddFriendship(ctx context.Context, a, b string) error {
 	return err
 }
 
+// AreFriends reports whether two users have a friendship row.
+func (r *UserRepository) AreFriends(ctx context.Context, a, b string) (bool, error) {
+	if a == b {
+		return false, nil
+	}
+	var ok bool
+	err := r.db.QueryRow(ctx, `
+		SELECT EXISTS(
+			SELECT 1 FROM friendships
+			WHERE user_1 = LEAST($1::uuid, $2::uuid) AND user_2 = GREATEST($1::uuid, $2::uuid)
+		)`, a, b).Scan(&ok)
+	return ok, err
+}
+
 func (r *UserRepository) ListFriends(ctx context.Context, userID string) ([]model.UserProfile, error) {
 	rows, err := r.db.Query(ctx, `
 		SELECT u.id, u.email, u.username

@@ -36,6 +36,7 @@ func main() {
 	protected.Any("/chats", h.MessageProxy)
 	protected.Any("/chats/*path", h.MessageProxy)
 	protected.Any("/chat/*path", h.ChatProxy)
+	protected.Any("/ws/signaling", h.ChatProxy)
 	protected.Any("/ws", h.ChatProxy)
 	r.GET("/docs/swagger.yaml", func(c *gin.Context) {
 		c.File("docs/swagger.yaml")

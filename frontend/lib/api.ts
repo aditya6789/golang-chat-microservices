@@ -4,13 +4,31 @@ const LS = {
   base: "chat_app_api_base",
 } as const;
 
+const DEFAULT_BASE = "http://localhost:8080";
+
+/** Ensures fetch/WebSocket URL helpers always get a valid absolute URL. */
+export function normalizeApiBase(raw: string): string {
+  let s = (raw || "").trim().replace(/\/$/, "");
+  if (!s) return DEFAULT_BASE;
+  if (!/^https?:\/\//i.test(s)) {
+    s = "http://" + s.replace(/^\/+/, "");
+  }
+  try {
+    const u = new URL(s);
+    if (!u.hostname) return DEFAULT_BASE;
+    return s.replace(/\/$/, "");
+  } catch {
+    return DEFAULT_BASE;
+  }
+}
+
 export function getBase(): string {
-  if (typeof window === "undefined") return "http://localhost:8080";
-  return (localStorage.getItem(LS.base) || "http://localhost:8080").replace(/\/$/, "");
+  if (typeof window === "undefined") return DEFAULT_BASE;
+  return normalizeApiBase(localStorage.getItem(LS.base) || DEFAULT_BASE);
 }
 
 export function setBase(url: string): void {
-  localStorage.setItem(LS.base, (url || "").trim().replace(/\/$/, ""));
+  localStorage.setItem(LS.base, normalizeApiBase(url));
 }
 
 export function getAccess(): string {
@@ -95,8 +113,29 @@ export async function api(method: string, path: string, body?: object): Promise<
 
 export function wsURL(chatId: string): string {
   const base = getBase();
-  const u = new URL(base);
-  const proto = u.protocol === "https:" ? "wss:" : "ws:";
-  const token = encodeURIComponent(getAccess());
-  return `${proto}//${u.host}/ws?chat_id=${encodeURIComponent(chatId)}&access_token=${token}`;
+  try {
+    const u = new URL(base);
+    const proto = u.protocol === "https:" ? "wss:" : "ws:";
+    const token = encodeURIComponent(getAccess());
+    return `${proto}//${u.host}/ws?chat_id=${encodeURIComponent(chatId)}&access_token=${token}`;
+  } catch {
+    const u = new URL(DEFAULT_BASE);
+    const token = encodeURIComponent(getAccess());
+    return `ws://${u.host}/ws?chat_id=${encodeURIComponent(chatId)}&access_token=${token}`;
+  }
+}
+
+/** WebRTC signaling (1:1 voice/video); friend-gated on the server. */
+export function signalingURL(): string {
+  const base = getBase();
+  try {
+    const u = new URL(base);
+    const proto = u.protocol === "https:" ? "wss:" : "ws:";
+    const token = encodeURIComponent(getAccess());
+    return `${proto}//${u.host}/ws/signaling?access_token=${token}`;
+  } catch {
+    const u = new URL(DEFAULT_BASE);
+    const token = encodeURIComponent(getAccess());
+    return `ws://${u.host}/ws/signaling?access_token=${token}`;
+  }
 }

@@ -6,6 +6,7 @@ type Config struct {
 	Port              string
 	JWTSecret         string
 	MessageServiceURL string
+	UserServiceURL    string
 }
 
 func Load() Config {
@@ -13,6 +14,7 @@ func Load() Config {
 		Port:              env("CHAT_SERVICE_PORT", "8083"),
 		JWTSecret:         env("JWT_SECRET", "super-secret"),
 		MessageServiceURL: env("MESSAGE_SERVICE_URL", "http://localhost:8084"),
+		UserServiceURL:    env("USER_SERVICE_URL", "http://localhost:8082"),
 	}
 }
 func env(k, d string) string {

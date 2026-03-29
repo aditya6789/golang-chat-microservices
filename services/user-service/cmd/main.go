@@ -38,6 +38,7 @@ func main() {
 	r.POST("/friends", h.AddFriend)
 	r.GET("/users/:id", h.Profile)
 	r.POST("/users/:id/heartbeat", h.Heartbeat)
+	r.GET("/internal/friendship", h.InternalFriendship)
 	_ = r.Run(":" + cfg.Port)
 }
 

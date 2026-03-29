@@ -114,6 +114,8 @@ services:
     ports:
       - "8083:8083"
     depends_on:
+      user-service:
+        condition: service_started
       message-service:
         condition: service_started
       redis:

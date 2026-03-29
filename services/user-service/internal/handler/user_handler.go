@@ -88,6 +88,22 @@ func (h *UserHandler) AddFriend(c *gin.Context) {
 	c.JSON(http.StatusCreated, gin.H{"status": "ok"})
 }
 
+// InternalFriendship is for backend services (e.g. chat signaling): GET ?user_id=&peer_id=
+func (h *UserHandler) InternalFriendship(c *gin.Context) {
+	uid := c.Query("user_id")
+	peer := c.Query("peer_id")
+	if uid == "" || peer == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "user_id and peer_id required"})
+		return
+	}
+	ok, err := h.svc.AreFriends(c.Request.Context(), uid, peer)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"friends": ok})
+}
+
 func (h *UserHandler) Heartbeat(c *gin.Context) {
 	id := c.Param("id")
 	uid := c.GetHeader("X-User-Id")
