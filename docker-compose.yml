@@ -30,12 +30,13 @@ services:
 
   nats:
     image: nats:2.10-alpine
-    command: ["-js"]
+    # JetStream + HTTP monitoring (8222) — required for /healthz; plain ["-js"] drops default -m and breaks healthcheck
+    command: ["-js", "-m", "8222"]
     ports:
       - "4222:4222"
       - "8222:8222"
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:8222/healthz"]
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8222/healthz"]
       interval: 10s
       timeout: 5s
       retries: 5

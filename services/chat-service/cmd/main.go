@@ -23,6 +23,7 @@ func main() {
 	members := &client.MembershipClient{BaseURL: cfg.MessageServiceURL}
 	hub := service.NewHub(repo, nc, members)
 	hub.StartMessageFanout()
+	hub.StartReactionFanout()
 	h := handler.New(hub, cfg.JWTSecret)
 
 	r := gin.New()

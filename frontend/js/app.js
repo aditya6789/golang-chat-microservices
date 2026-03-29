@@ -17,8 +17,13 @@ let activeChatMeta = null;
 /** @type {string | null} other participant in active direct chat (for read ticks) */
 let directPeerUserId = null;
 
-/** @type {Array<{id?: string, sender_id: string, content: string, created_at?: string, _ts?: number, _pending?: boolean, read_by?: Array<{user_id: string, read_at?: string}>}>} */
+/** @type {Array<{id?: string, sender_id: string, content: string, created_at?: string, _ts?: number, _pending?: boolean, _replyToId?: string | null, reply_to_message_id?: string, reply_to?: { id?: string, sender_id?: string, content?: string, created_at?: string }, read_by?: Array<{user_id: string, read_at?: string}>, reactions?: Array<{ emoji: string, user_ids: string[] }>}>} */
 let messages = [];
+
+const QUICK_REACTIONS = ["👍", "❤️", "😂", "😮", "😢", "🙏"];
+
+/** @type {{ id: string, fromLabel: string, reply_to: { id: string, sender_id: string, content: string, created_at: string } } | null} */
+let replyingTo = null;
 let typingClearTimer = null;
 let heartbeatTimer = null;
 let typingDebounce = null;
@@ -50,6 +55,132 @@ function fmtTime(iso) {
   } catch {
     return "";
   }
+}
+
+function truncateText(s, max) {
+  if (s == null || s === "") return "";
+  if (s.length <= max) return s;
+  return s.slice(0, max) + "…";
+}
+
+function updateComposerReplyBar() {
+  const bar = $("#composerReplyBar");
+  const lab = $("#composerReplyLabel");
+  const sn = $("#composerReplySnippet");
+  if (!bar || !lab || !sn) return;
+  if (!replyingTo) {
+    bar.classList.add("hidden");
+    lab.textContent = "";
+    sn.textContent = "";
+    return;
+  }
+  bar.classList.remove("hidden");
+  lab.textContent = "Replying to " + replyingTo.fromLabel;
+  sn.textContent = truncateText(replyingTo.reply_to.content, 100);
+}
+
+function clearReplyTo() {
+  replyingTo = null;
+  updateComposerReplyBar();
+}
+
+function setReplyTo(msg) {
+  if (!msg?.id || msg._pending || String(msg.id).startsWith("pending-")) return;
+  const me = jwtSub(getAccess());
+  const fromLabel =
+    msg.sender_id === me ? "You" : (msg.sender_id || "").slice(0, 8) + "…";
+  replyingTo = {
+    id: msg.id,
+    fromLabel,
+    reply_to: {
+      id: msg.id,
+      sender_id: msg.sender_id,
+      content: truncateText(msg.content || "", 280),
+      created_at: msg.created_at || new Date().toISOString(),
+    },
+  };
+  updateComposerReplyBar();
+  $("#composerInput")?.focus();
+}
+
+function replyQuoteHtml(m) {
+  const rt = m.reply_to;
+  if (!rt || !rt.id) return "";
+  const me = jwtSub(getAccess());
+  const who =
+    rt.sender_id === me ? "You" : escapeHtml((rt.sender_id || "").slice(0, 8) + "…");
+  const sn = escapeHtml(truncateText(rt.content || "", 200));
+  return `<div class="bubble-quote"><span class="bubble-quote-author">${who}</span><span class="bubble-quote-text">${sn}</span></div>`;
+}
+
+function mergeReactionEvent(p) {
+  const mid = p.message_id;
+  const uid = p.sender_id;
+  const emoji = p.emoji;
+  const act = p.reaction_action === "remove" ? "remove" : "add";
+  if (!mid || !uid || !emoji) return;
+  const msg = messages.find((x) => String(x.id) === String(mid));
+  if (!msg) return;
+  if (!msg.reactions) msg.reactions = [];
+  let bucket = msg.reactions.find((r) => r.emoji === emoji);
+  if (act === "remove") {
+    if (!bucket) return;
+    bucket.user_ids = (bucket.user_ids || []).filter((u) => u !== uid);
+    if (bucket.user_ids.length === 0) {
+      msg.reactions = msg.reactions.filter((r) => r.emoji !== emoji);
+    }
+  } else {
+    if (!bucket) {
+      bucket = { emoji, user_ids: [] };
+      msg.reactions.push(bucket);
+    }
+    if (!bucket.user_ids.includes(uid)) bucket.user_ids.push(uid);
+  }
+  renderMessages();
+}
+
+function reactionRowHtml(m) {
+  const me = jwtSub(getAccess());
+  const mid = escapeHtml(String(m.id || ""));
+  const list = m.reactions || [];
+  const parts = [];
+  for (const r of list) {
+    const n = (r.user_ids || []).length;
+    const mine = me && (r.user_ids || []).includes(me);
+    const cls = mine ? "react-chip has-mine" : "react-chip";
+    parts.push(
+      `<button type="button" class="${cls}" data-react-emoji="${escapeHtml(r.emoji)}" data-msg-id="${mid}">${escapeHtml(r.emoji)}<span class="react-n">${n}</span></button>`
+    );
+  }
+  for (const em of QUICK_REACTIONS) {
+    if (list.some((x) => x.emoji === em)) continue;
+    parts.push(
+      `<button type="button" class="react-chip pick" data-react-pick="${escapeHtml(em)}" data-msg-id="${mid}">${escapeHtml(em)}</button>`
+    );
+  }
+  return `<div class="bubble-reactions">${parts.join("")}</div>`;
+}
+
+function sendReaction(messageId, emoji, add) {
+  if (!messageId || !emoji || !activeChatId) return;
+  const payload = JSON.stringify({
+    type: "reaction",
+    message_id: messageId,
+    emoji,
+    reaction_action: add ? "add" : "remove",
+  });
+  if (socket?.readyState === WebSocket.OPEN) {
+    try {
+      socket.send(payload);
+    } catch (_) {}
+    return;
+  }
+  void api("POST", "/messages/" + encodeURIComponent(messageId) + "/reactions", {
+    emoji,
+    add,
+  }).then((r) => {
+    if (r.ok) mergeReactionEvent({ message_id: messageId, sender_id: jwtSub(getAccess()), emoji, reaction_action: add ? "add" : "remove" });
+  });
 }
 
 /** Receipt ticks for outgoing bubbles only (HTML). */
@@ -301,6 +432,7 @@ async function openChat(chatId, meta) {
   activeChatId = String(chatId || "").trim();
   activeChatMeta = meta || null;
   directPeerUserId = null;
+  clearReplyTo();
   $$(".chat-item").forEach((el) => {
     el.classList.toggle("active", el.dataset.id === chatId);
   });
@@ -355,10 +487,20 @@ function renderMessages() {
     div.className = "bubble-row " + (mine ? "mine" : "theirs");
     const t = m.created_at ? fmtTime(m.created_at) : "";
     const rcpt = mine ? receiptMarkup(m) : "";
+    const q = replyQuoteHtml(m);
+    const canReply =
+      m.id && !m._pending && !String(m.id).startsWith("pending-");
+    const replyBtn = canReply
+      ? `<button type="button" class="reply-pill" data-reply-id="${escapeHtml(String(m.id))}">Reply</button>`
+      : "";
+    const reactRow =
+      m.id && !String(m.id).startsWith("pending-") ? reactionRowHtml(m) : "";
     div.innerHTML = `
       <div class="bubble">
-        <div class="bubble-meta">${mine ? "You" : escapeHtml((m.sender_id || "").slice(0, 8) + "…")} · ${t}${rcpt}</div>
+        <div class="bubble-meta">${mine ? "You" : escapeHtml((m.sender_id || "").slice(0, 8) + "…")} · ${t}${rcpt}${replyBtn}</div>
+        ${q}
         <div class="bubble-text">${escapeHtml(m.content || "")}</div>
+        ${reactRow}
       </div>`;
     box.appendChild(div);
   });
@@ -370,10 +512,16 @@ function pushMessage(m) {
   const realId = m.message_id || m.id;
   const content = m.content || "";
   const sender = m.sender_id || "";
+  const wireReplyId = m.reply_to_message_id || m.reply_to?.id || "";
+  const wireReplyTo = m.reply_to || null;
 
   if (realId && sender === me) {
     const pi = messages.findIndex(
-      (x) => x._pending && x.sender_id === sender && x.content === content
+      (x) =>
+        x._pending &&
+        x.sender_id === sender &&
+        x.content === content &&
+        (x._replyToId || "") === (wireReplyId || "")
     );
     if (pi >= 0) {
       messages[pi] = {
@@ -383,6 +531,9 @@ function pushMessage(m) {
         created_at: m.at || m.created_at || messages[pi].created_at,
         _ts: m.at ? new Date(m.at).getTime() : Date.now(),
         read_by: m.read_by || messages[pi].read_by || [],
+        reply_to_message_id: wireReplyId || undefined,
+        reply_to: wireReplyTo || messages[pi].reply_to,
+        reactions: m.reactions || messages[pi].reactions || [],
       };
       renderMessages();
       return;
@@ -396,6 +547,7 @@ function pushMessage(m) {
     (x) =>
       x.sender_id === sender &&
       x.content === content &&
+      (x.reply_to_message_id || x.reply_to?.id || "") === (wireReplyId || "") &&
       (!m.at || !x._ts || Math.abs(new Date(m.at).getTime() - x._ts) < 4000)
   );
   if (dup) return;
@@ -407,6 +559,9 @@ function pushMessage(m) {
     created_at: m.at || m.created_at || new Date().toISOString(),
     _ts: m.at ? new Date(m.at).getTime() : Date.now(),
     read_by: m.read_by || [],
+    reply_to_message_id: wireReplyId || undefined,
+    reply_to: wireReplyTo || undefined,
+    reactions: m.reactions || [],
   });
   renderMessages();
 
@@ -467,6 +622,10 @@ function connectWS() {
       pushMessage(p);
       return;
     }
+    if (p.type === "reaction") {
+      mergeReactionEvent(p);
+      return;
+    }
     if (p.type === "read_receipt") {
       const mid = p.message_id;
       const reader = p.sender_id;
@@ -503,7 +662,13 @@ async function sendText() {
   if (!text || !activeChatId) return;
   input.value = "";
 
-  const payload = JSON.stringify({ type: "message", content: text });
+  const replySnap = replyingTo;
+  clearReplyTo();
+
+  const wsBody = { type: "message", content: text };
+  if (replySnap?.id) wsBody.reply_to_message_id = replySnap.id;
+
+  const payload = JSON.stringify(wsBody);
   if (socket && socket.readyState === WebSocket.OPEN) {
     const me = jwtSub(getAccess());
     const pendingId =
@@ -514,7 +679,11 @@ async function sendText() {
       content: text,
       created_at: new Date().toISOString(),
       _pending: true,
+      _replyToId: replySnap?.id || null,
       read_by: [],
+      reactions: [],
+      reply_to_message_id: replySnap?.id,
+      reply_to: replySnap?.reply_to,
     });
     renderMessages();
     socket.send(payload);
@@ -523,11 +692,13 @@ async function sendText() {
   const idem =
     (globalThis.crypto?.randomUUID?.() ||
       "web-" + Date.now() + "-" + Math.random().toString(36).slice(2));
-  const r = await api("POST", "/messages", {
+  const body = {
     chat_id: activeChatId,
     content: text,
     idempotency_key: idem,
-  });
+  };
+  if (replySnap?.id) body.reply_to_message_id = replySnap.id;
+  const r = await api("POST", "/messages", body);
   if (r.ok && r.data) {
     messages.push({
       id: r.data.id,
@@ -535,6 +706,9 @@ async function sendText() {
       content: r.data.content,
       created_at: r.data.created_at,
       read_by: r.data.read_by || [],
+      reply_to_message_id: r.data.reply_to_message_id,
+      reply_to: r.data.reply_to,
+      reactions: r.data.reactions || [],
     });
     renderMessages();
   }
@@ -662,6 +836,7 @@ function leaveApp() {
   activeChatId = null;
   activeChatMeta = null;
   directPeerUserId = null;
+  clearReplyTo();
   messages = [];
   $("#threadPanel").classList.add("hidden");
   $("#threadEmpty").classList.remove("hidden");
@@ -750,6 +925,34 @@ export function init() {
       await openChat(r.data.id, { id: r.data.id, type: "group", name });
     }
   });
+
+  $("#messageList").addEventListener("click", (e) => {
+    const pick = e.target.closest("[data-react-pick]");
+    if (pick) {
+      const mid = pick.getAttribute("data-msg-id");
+      const em = pick.getAttribute("data-react-pick");
+      if (mid && em) sendReaction(mid, em, true);
+      return;
+    }
+    const chip = e.target.closest("[data-react-emoji]");
+    if (chip) {
+      const mid = chip.getAttribute("data-msg-id");
+      const em = chip.getAttribute("data-react-emoji");
+      const me = jwtSub(getAccess());
+      const msg = messages.find((x) => String(x.id) === String(mid));
+      const r = msg?.reactions?.find((x) => x.emoji === em);
+      const mine = me && r?.user_ids?.includes(me);
+      if (mid && em) sendReaction(mid, em, !mine);
+      return;
+    }
+    const btn = e.target.closest("[data-reply-id]");
+    if (!btn) return;
+    const id = btn.getAttribute("data-reply-id");
+    const msg = messages.find((x) => String(x.id) === String(id));
+    if (msg) setReplyTo(msg);
+  });
+
+  $("#btnCancelReply")?.addEventListener("click", () => clearReplyTo());
 
   $("#btnSend").addEventListener("click", () => sendText());
   $("#composerInput").addEventListener("keydown", (e) => {

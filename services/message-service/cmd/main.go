@@ -27,7 +27,8 @@ func main() {
 	repo := repository.New(db)
 	chatRepo := repository.NewChatRepository(db)
 	receiptRepo := repository.NewReceiptRepository(db)
-	svc := service.New(repo, chatRepo, receiptRepo, nc)
+	reactionRepo := repository.NewReactionRepository(db)
+	svc := service.New(repo, chatRepo, receiptRepo, reactionRepo, nc)
 	h := handler.New(svc)
 	ch := handler.NewChatHandler(chatRepo)
 	_, _ = nc.Subscribe("chat.message.persist", func(msg *nats.Msg) {
@@ -35,6 +36,9 @@ func main() {
 	})
 	_, _ = nc.Subscribe("chat.receipt.persist", func(msg *nats.Msg) {
 		_ = svc.PersistReceiptFromEvent(context.Background(), msg.Data)
+	})
+	_, _ = nc.Subscribe("chat.reaction.persist", func(msg *nats.Msg) {
+		_ = svc.PersistReactionFromEvent(context.Background(), msg.Data)
 	})
 
 	r := gin.New()
@@ -48,6 +52,7 @@ func main() {
 	r.POST("/chats/:chat_id/members", ch.AddMember)
 	r.GET("/chats/:chat_id/members", ch.ListMembers)
 	r.POST("/messages", h.Create)
+	r.POST("/messages/:message_id/reactions", h.ToggleReaction)
 	r.GET("/messages/:chat_id", h.History)
 	_ = r.Run(":" + cfg.Port)
 }

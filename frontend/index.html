@@ -122,8 +122,19 @@
           </div>
 
           <footer class="composer">
-            <textarea id="composerInput" rows="1" placeholder="Message… (Enter to send, Shift+Enter newline)"></textarea>
-            <button type="button" class="btn primary" id="btnSend">Send</button>
+            <div id="composerReplyBar" class="composer-reply hidden" aria-live="polite">
+              <div class="composer-reply-line">
+                <div class="composer-reply-text">
+                  <span class="composer-reply-label" id="composerReplyLabel"></span>
+                  <span class="composer-reply-snippet" id="composerReplySnippet"></span>
+                </div>
+                <button type="button" class="btn text tiny" id="btnCancelReply">Cancel</button>
+              </div>
+            </div>
+            <div class="composer-row">
+              <textarea id="composerInput" rows="1" placeholder="Message… (Enter to send, Shift+Enter newline)"></textarea>
+              <button type="button" class="btn primary" id="btnSend">Send</button>
+            </div>
           </footer>
         </div>
       </main>

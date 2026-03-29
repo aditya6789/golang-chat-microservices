@@ -1,7 +1,6 @@
 package handler
 
 import (
-	"context"
 	"encoding/json"
 	"net/http"
 	"time"
@@ -55,10 +54,10 @@ func (h *WebSocketHandler) Connect(c *gin.Context) {
 		return conn.SetReadDeadline(time.Now().Add(60 * time.Second))
 	})
 	key := connKey(userID, chatID)
-	h.hub.Register(key, conn)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go h.hub.StreamChat(ctx, key, chatID)
+	streamCtx, streamCancel := h.hub.BeginSession(key, conn)
+	defer streamCancel()
+	defer h.hub.UnregisterIf(key, conn)
+	go h.hub.StreamChat(streamCtx, key, chatID)
 
 	for {
 		_ = conn.SetReadDeadline(time.Now().Add(60 * time.Second))
@@ -78,7 +77,6 @@ func (h *WebSocketHandler) Connect(c *gin.Context) {
 		e.At = time.Now().UTC()
 		_ = h.hub.HandleInbound(c.Request.Context(), e)
 	}
-	h.hub.Unregister(key)
 	_ = conn.Close()
 }
 

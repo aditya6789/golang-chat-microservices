@@ -6,7 +6,7 @@ Chat Service handles realtime communication over WebSocket and fan-out using Red
 
 - Upgrade HTTP connections to WebSocket
 - Maintain active connection pool (in-memory)
-- Receive inbound chat events (message/typing/read-receipt)
+- Receive inbound chat events (message/typing/read-receipt/reaction)
 - Broadcast events through Redis pub/sub channels
 - Publish message events to NATS for async persistence
 
@@ -40,6 +40,7 @@ Other `type` values supported by design:
 
 - `typing`
 - `read_receipt`
+- `reaction` — `{ "message_id", "emoji", "reaction_action": "add" | "remove" }` (persisted via NATS; fan-out after `chat.reaction.updated`)
 
 Server enriches payload with `chat_id`, `sender_id`, and `at`.
 
@@ -52,6 +53,7 @@ Server enriches payload with `chat_id`, `sender_id`, and `at`.
 
 - Outgoing persist event: `chat.message.persist` (includes `idempotency_key`)
 - Read receipts: `chat.receipt.persist`
+- Reactions: `chat.reaction.persist` → message-service → `chat.reaction.updated` (subscribed here for Redis fan-out)
 
 ## Reconnect and Liveness
 

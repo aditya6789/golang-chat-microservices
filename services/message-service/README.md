@@ -26,7 +26,8 @@ Message Service is responsible for durable message storage and history retrieval
 - `POST /chats/:chat_id/members` — add member (group only)
 - `GET /chats/:chat_id/members` — list members (must be in chat)
 - `POST /messages` — sender is always `X-User-Id` (body no longer accepts `sender_id`)
-- `GET /messages/:chat_id?limit=20&offset=0` — requires membership; each item may include `read_by` from `message_receipts`
+- `GET /messages/:chat_id?limit=20&offset=0` — requires membership; each item may include `read_by` and aggregated `reactions`
+- `POST /messages/:message_id/reactions` — body `{ "emoji": "👍", "add": true }` (`add` defaults true); `204` on success
 
 ## Idempotency
 
@@ -35,18 +36,20 @@ Message Service is responsible for durable message storage and history retrieval
 ```json
 {
   "chat_id": "chat-uuid",
-  "sender_id": "user-uuid",
   "content": "Hi",
-  "idempotency_key": "client-generated-unique-key"
+  "idempotency_key": "client-generated-unique-key",
+  "reply_to_message_id": "optional-parent-message-uuid"
 }
 ```
+
+`reply_to_message_id` must reference a message in the same chat. Responses and history include `reply_to` (snippet of the parent) when set.
 
 DB constraint on `idempotency_key` prevents duplicate inserts when clients retry.
 
 ## NATS Subjects
 
-- Consumed: `chat.message.persist`, `chat.receipt.persist`
-- Published: `chat.message.created`
+- Consumed: `chat.message.persist`, `chat.receipt.persist`, `chat.reaction.persist`
+- Published: `chat.message.created`, `chat.reaction.updated` (for chat-service WebSocket fan-out)
 
 ## Important Files
 

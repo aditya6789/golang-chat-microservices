@@ -47,10 +47,10 @@ I structured it this way to practice how a real chat product splits **auth**, **
 |------|----------------|
 | **Auth** | Register / login, JWT access tokens, refresh token rotation (Postgres-backed) |
 | **Realtime** | WebSocket connection per chat; typing indicators; messages fan-out via **Redis pub/sub** |
-| **Persistence** | Messages and read receipts via **NATS** consumers in `message-service` |
+| **Persistence** | Messages, read receipts, and **emoji reactions** via **NATS** consumers in `message-service` (`message_reactions` table) |
 | **Social** | Search users by **email / username**; **friends**; **direct chats** only between friends; **groups** only with friends (and add-member restricted to friends) |
 | **Gateway** | Single entrypoint, **JWT validation**, **`X-User-Id` / `X-Request-Id`** injection, **rate limiting**, **CORS** for browser clients |
-| **UI** | **Orbit Chat** static SPA + `go run ./cmd/serve-frontend` (settings: gateway base URL); **read receipts** (delivered ✓ / read ✓✓) synced from `message_receipts` + WebSocket |
+| **UI** | **Orbit Chat** static SPA + `go run ./cmd/serve-frontend` (settings: gateway base URL); **read receipts**; **reply threading**; **emoji reactions** (chips + quick picks, WebSocket + REST) |
 | **Ops** | **Docker Compose** for all infra + services; **`/healthz`** and **Prometheus-style `/metrics`** on services |
 
 ---
@@ -62,8 +62,8 @@ Most of the following is still a **personal backlog**; a few items (e.g. read re
 ### Chat and UX
 
 - ~~**Read receipts in the UI**~~ — **Done:** Orbit Chat shows delivered/read on your own bubbles; history includes `read_by` from `message_receipts`; `read_receipt` events over the WebSocket update peers live.
-- **Reply threading** — `reply_to_message_id`, quoted bubbles, stable ordering.
-- **Reactions** — emoji per message, pushed over the WebSocket.
+- ~~**Reply threading**~~ — **Done:** `messages.reply_to_message_id` + `reply_to` preview in REST/history and on WebSocket payloads; Orbit Chat **Reply** control and quoted strip above the new text; order remains `created_at` ascending in the thread view.
+- ~~**Reactions**~~ — **Done:** `message_reactions` in Postgres; `chat.reaction.persist` / `chat.reaction.updated` over NATS; Orbit Chat sends `{type:"reaction", message_id, emoji, reaction_action}` on the WebSocket; `POST /messages/:id/reactions` as fallback; history includes `reactions` per message.
 - **Edit and delete** — soft delete, `edited_at`, realtime sync to other clients.
 - **Mentions** — `@username` resolution and light notifications.
 - **Unread counts** — per-chat read cursors or a small aggregate API for the sidebar.
@@ -113,7 +113,7 @@ Most of the following is still a **personal backlog**; a few items (e.g. read re
 - **E2E** — Playwright (or similar) against Compose: sign up → friend → DM → send.
 - **Swagger UI** — tiny page over the existing `docs/swagger.yaml`.
 
-**What I will probably pick up first:** reply threading, then CI, then presigned uploads, then friend requests—roughly in that order.
+**What I will probably pick up first:** CI, then presigned uploads or edit/delete, then friend requests—roughly in that order.
 
 ---
 
@@ -369,11 +369,15 @@ Files under `migrations/` are mounted into Postgres `docker-entrypoint-initdb.d`
 | `001_init.sql` | users, chats, chat_members, messages, message_receipts |
 | `002_refresh_tokens.sql` | refresh_tokens |
 | `003_friendships.sql` | friendships (required for friends / friend-gated chats) |
+| `004_reply_to_message.sql` | `messages.reply_to_message_id` (optional FK to parent message) |
+| `005_message_reactions.sql` | `message_reactions` (per user per emoji per message) |
 
 **Existing volume?** Apply new SQL manually, e.g.:
 
 ```bash
 docker compose exec -T postgres psql -U chat_user -d chat_db -f /docker-entrypoint-initdb.d/003_friendships.sql
+docker compose exec -T postgres psql -U chat_user -d chat_db -f /docker-entrypoint-initdb.d/004_reply_to_message.sql
+docker compose exec -T postgres psql -U chat_user -d chat_db -f /docker-entrypoint-initdb.d/005_message_reactions.sql
 ```
 
 ---
