@@ -1656,7 +1656,7 @@ export default function ChatApp() {
                               {voiceCameraOff ? "Cam on" : "Cam off"}
                             </button>
                           ) : null}
-                          <button
+                          <button 
                             type="button"
                             className="btn voice-btn-end"
                             onClick={() => voiceRef.current?.endCall()}
