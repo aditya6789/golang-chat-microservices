@@ -91,18 +91,39 @@ func (h *Hub) HandleInbound(ctx context.Context, e model.Event) error {
 	if e.Type == "message" {
 		idem := "ws:" + uuid.NewString()
 		type persistPayload struct {
-			ChatID               string `json:"chat_id"`
-			SenderID             string `json:"sender_id"`
-			Content              string `json:"content"`
-			IdempotencyKey       string `json:"idempotency_key"`
-			ReplyToMessageID     string `json:"reply_to_message_id,omitempty"`
+			ChatID           string `json:"chat_id"`
+			SenderID         string `json:"sender_id"`
+			Content          string `json:"content"`
+			MessageType      string `json:"message_type,omitempty"`
+			File             *struct {
+				ObjectKey string `json:"object_key"`
+				Filename  string `json:"filename"`
+				MimeType  string `json:"mime_type"`
+				SizeBytes int64  `json:"size_bytes"`
+			} `json:"file,omitempty"`
+			IdempotencyKey   string `json:"idempotency_key"`
+			ReplyToMessageID string `json:"reply_to_message_id,omitempty"`
 		}
 		p := persistPayload{
 			ChatID:           e.ChatID,
 			SenderID:         e.SenderID,
 			Content:          e.Content,
+			MessageType:      e.MessageType,
 			IdempotencyKey:   idem,
 			ReplyToMessageID: e.ReplyToMessageID,
+		}
+		if e.File != nil {
+			p.File = &struct {
+				ObjectKey string `json:"object_key"`
+				Filename  string `json:"filename"`
+				MimeType  string `json:"mime_type"`
+				SizeBytes int64  `json:"size_bytes"`
+			}{
+				ObjectKey: e.File.ObjectKey,
+				Filename:  e.File.Filename,
+				MimeType:  e.File.MimeType,
+				SizeBytes: e.File.SizeBytes,
+			}
 		}
 		b, _ := json.Marshal(p)
 		_ = h.nc.Publish("chat.message.persist", b)
@@ -141,6 +162,7 @@ func (h *Hub) StartMessageFanout() {
 			ID               string            `json:"id"`
 			ChatID           string            `json:"chat_id"`
 			SenderID         string            `json:"sender_id"`
+			MessageType      string            `json:"message_type"`
 			Content          string            `json:"content"`
 			CreatedAt        time.Time         `json:"created_at"`
 			ReplyToMessageID *string           `json:"reply_to_message_id"`
@@ -153,14 +175,19 @@ func (h *Hub) StartMessageFanout() {
 		if at.IsZero() {
 			at = time.Now().UTC()
 		}
+		mt := m.MessageType
+		if mt == "" {
+			mt = "text"
+		}
 		e := model.Event{
-			Type:      "message",
-			ChatID:    m.ChatID,
-			SenderID:  m.SenderID,
-			Content:   m.Content,
-			MessageID: m.ID,
-			At:        at.UTC(),
-			ReplyTo:   m.ReplyTo,
+			Type:        "message",
+			ChatID:      m.ChatID,
+			SenderID:    m.SenderID,
+			MessageType: mt,
+			Content:     m.Content,
+			MessageID:   m.ID,
+			At:          at.UTC(),
+			ReplyTo:     m.ReplyTo,
 		}
 		if m.ReplyToMessageID != nil && *m.ReplyToMessageID != "" {
 			e.ReplyToMessageID = *m.ReplyToMessageID

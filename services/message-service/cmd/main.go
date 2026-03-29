@@ -8,7 +8,9 @@ import (
 	"realtime-chat-system/pkg/infra"
 	"realtime-chat-system/pkg/httpx"
 	"realtime-chat-system/services/message-service/config"
+	"realtime-chat-system/services/message-service/internal/attachment"
 	"realtime-chat-system/services/message-service/internal/handler"
+	"realtime-chat-system/services/message-service/internal/linkpreview"
 	"realtime-chat-system/services/message-service/internal/repository"
 	"realtime-chat-system/services/message-service/internal/service"
 
@@ -28,8 +30,24 @@ func main() {
 	chatRepo := repository.NewChatRepository(db)
 	receiptRepo := repository.NewReceiptRepository(db)
 	reactionRepo := repository.NewReactionRepository(db)
-	svc := service.New(repo, chatRepo, receiptRepo, reactionRepo, nc)
-	h := handler.New(svc)
+	s3cfg := cfg.S3
+	store, err := attachment.NewStore(ctx, attachment.Config{
+		Endpoint:     s3cfg.Endpoint,
+		Region:       s3cfg.Region,
+		AccessKey:    s3cfg.AccessKey,
+		SecretKey:    s3cfg.SecretKey,
+		Bucket:       s3cfg.Bucket,
+		PublicBase:   s3cfg.PublicBase,
+		UsePathStyle: s3cfg.UsePathStyle,
+		MaxBytes:     s3cfg.MaxBytes,
+		PresignTTL:   s3cfg.PresignTTL,
+	})
+	if err != nil {
+		panic(err)
+	}
+	svc := service.New(repo, chatRepo, receiptRepo, reactionRepo, store, nc)
+	og := linkpreview.NewService(15*time.Minute, 2000)
+	h := handler.New(svc, og)
 	ch := handler.NewChatHandler(chatRepo)
 	_, _ = nc.Subscribe("chat.message.persist", func(msg *nats.Msg) {
 		_ = svc.PersistFromEvent(context.Background(), msg.Data)
@@ -51,7 +69,9 @@ func main() {
 	r.GET("/chats", ch.ListMine)
 	r.POST("/chats/:chat_id/members", ch.AddMember)
 	r.GET("/chats/:chat_id/members", ch.ListMembers)
+	r.POST("/chats/:chat_id/attachments/presign", h.PresignAttachment)
 	r.POST("/messages", h.Create)
+	r.GET("/messages/link-preview", h.LinkPreview)
 	r.POST("/messages/:message_id/reactions", h.ToggleReaction)
 	r.GET("/messages/:chat_id", h.History)
 	_ = r.Run(":" + cfg.Port)

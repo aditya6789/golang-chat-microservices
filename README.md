@@ -1,6 +1,6 @@
 # Realtime Chat System — Golang Microservices
 
-[![Go](https://img.shields.io/badge/Go-1.22+-00ADD8?logo=go&logoColor=white)](https://go.dev/)
+[![Go](https://img.shields.io/badge/Go-1.24+-00ADD8?logo=go&logoColor=white)](https://go.dev/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](./LICENSE)
 [![Status](https://img.shields.io/badge/status-active-success)]()
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](./CONTRIBUTING.md)
@@ -47,10 +47,11 @@ I structured it this way to practice how a real chat product splits **auth**, **
 |------|----------------|
 | **Auth** | Register / login, JWT access tokens, refresh token rotation (Postgres-backed) |
 | **Realtime** | WebSocket connection per chat; typing indicators; messages fan-out via **Redis pub/sub** |
-| **Persistence** | Messages, read receipts, and **emoji reactions** via **NATS** consumers in `message-service` (`message_reactions` table) |
+| **Persistence** | Messages (including **`message_type` `text` \| `file`**), read receipts, and **emoji reactions** via **NATS** consumers in `message-service` |
+| **Attachments** | **Presigned PUT** to **S3-compatible** storage (MinIO in Compose); `POST /chats/:id/attachments/presign` then `POST /messages` with `message_type: file` |
 | **Social** | Search users by **email / username**; **friends**; **direct chats** only between friends; **groups** only with friends (and add-member restricted to friends) |
 | **Gateway** | Single entrypoint, **JWT validation**, **`X-User-Id` / `X-Request-Id`** injection, **rate limiting**, **CORS** for browser clients |
-| **UI** | **Orbit Chat** static SPA + `go run ./cmd/serve-frontend` (settings: gateway base URL); **read receipts**; **reply threading**; **emoji reactions** (chips + quick picks, WebSocket + REST) |
+| **UI** | **Orbit Chat** (Next.js app + static SPA via `go run ./cmd/serve-frontend`); **read receipts**; **reply threading**; **emoji reactions**; **file attachments**; **Open Graph link previews** on URLs in text messages |
 | **Ops** | **Docker Compose** for all infra + services; **`/healthz`** and **Prometheus-style `/metrics`** on services |
 
 ---
@@ -77,8 +78,8 @@ Most of the following is still a **personal backlog**; a few items (e.g. read re
 
 ### Media and rich content
 
-- **Attachments** — presigned uploads (S3 or MinIO), `file` message type with limits.
-- **Link previews** — cached, rate-limited Open Graph fetches.
+- ~~**Attachments**~~ — **Done:** presigned uploads (S3 or MinIO), `messages.message_type` `file`, `POST /chats/:chat_id/attachments/presign`, MinIO + bucket in Docker Compose; Orbit Chat **+** control uploads then saves a file message with image preview when applicable.
+- ~~**Link previews**~~ — **Done:** `GET /messages/link-preview?url=` (Open Graph + fallbacks); in-memory TTL cache and per-user rate limit in `message-service`; SSRF-safe fetch; Orbit Chat shows a card under the first `http(s)` URL in a text bubble.
 
 ### Voice and video (native, first-party)
 
@@ -113,7 +114,7 @@ Most of the following is still a **personal backlog**; a few items (e.g. read re
 - **E2E** — Playwright (or similar) against Compose: sign up → friend → DM → send.
 - **Swagger UI** — tiny page over the existing `docs/swagger.yaml`.
 
-**What I will probably pick up first:** CI, then presigned uploads or edit/delete, then friend requests—roughly in that order.
+**What I will probably pick up first:** CI, then edit/delete, then friend requests—roughly in that order.
 
 ---
 
@@ -214,7 +215,7 @@ These are the trade-offs I had in mind when I split the system this way:
 
 ## Tech stack
 
-- **Go 1.22+**, **Gin**, **Gorilla WebSocket**
+- **Go 1.24+**, **Gin**, **Gorilla WebSocket**
 - **PostgreSQL 16**, **Redis 7**, **NATS 2** (JetStream-capable image)
 - **Docker Compose** for local full stack
 - **JWT** (shared secret; validated at gateway and chat-service)
@@ -250,7 +251,7 @@ Each service follows a common internal layout: `cmd/`, `internal/handler|service
 1. Client obtains JWT via `POST /auth/login` or `POST /auth/register` (through gateway).
 2. **REST** calls include `Authorization: Bearer <token>`; gateway sets **`X-User-Id`** for downstream services.
 3. Client opens **WebSocket** on the gateway URL with `chat_id` + token; **chat-service** validates JWT and checks **chat membership** via message-service before upgrade.
-4. **Inbound WS events** (`message`, `typing`, `read_receipt`) publish to **Redis** for live fan-out; **message** / receipts are also sent to **NATS** for **message-service** to persist.
+4. **Inbound WS events** (`message`, `typing`, `read_receipt`) publish to **Redis** for live fan-out; **message** / receipts are also sent to **NATS** for **message-service** to persist. **File messages** typically use **REST** (`presign` → browser **PUT** to object storage → `POST /messages` with `message_type: file`); the persisted row is fan-out over **NATS** like text messages.
 5. After persistence, **notification-service** can react to **`chat.message.created`** (extend for push/email).
 
 ---
@@ -281,8 +282,10 @@ Base URL (local): **`http://localhost:8080`**
 | GET | `/chats` | List my chats |
 | POST | `/chats/:chat_id/members` | Add member (**group**; must be friend) |
 | GET | `/chats/:chat_id/members` | Members (+ username/email) |
-| POST | `/messages` | Send message (idempotency key supported) |
-| GET | `/messages/:chat_id` | History (`limit`, `offset`) |
+| POST | `/chats/:chat_id/attachments/presign` | Body `filename`, `content_type`, `size_bytes` — returns `upload_url`, `object_key`, `headers` for **PUT** |
+| POST | `/messages` | Send message: `content` + optional `reply_to_message_id`, or **`message_type: "file"`** + **`file`** (`object_key`, `filename`, `mime_type`, `size_bytes`) after upload; idempotency key supported |
+| GET | `/messages/link-preview?url=` | Open Graph metadata for a public `http(s)` URL (cached; rate-limited per user) |
+| GET | `/messages/:chat_id` | History (`limit`, `offset`) — includes `message_type` and file JSON in `content` when `file` |
 | GET | `/ws` | WebSocket (query: `chat_id`, `access_token`) |
 | GET | `/docs/swagger.yaml` | OpenAPI-style description |
 
@@ -313,8 +316,8 @@ curl -s -X POST http://localhost:8080/chats/direct \
 
 ## Configuration
 
-- **`.env.example`** — template for JWT TTL, Postgres, Redis, NATS, ports. Compose references it by default; copy to `.env` when you need overrides.
-- **Important vars:** `JWT_SECRET` (change in any real deployment), `POSTGRES_*`, `REDIS_ADDR`, `NATS_URL`, per-service ports.
+- **`.env.example`** — template for JWT TTL, Postgres, Redis, NATS, **S3 / MinIO** (`S3_ENDPOINT`, `S3_PUBLIC_BASE_URL`, keys, `S3_BUCKET`), ports. Compose references it by default; copy to `.env` when you need overrides.
+- **Important vars:** `JWT_SECRET` (change in any real deployment), `POSTGRES_*`, `REDIS_ADDR`, `NATS_URL`, **`S3_*`** for attachments, per-service ports. **`S3_PUBLIC_BASE_URL`** must be reachable from the **browser** (e.g. `http://localhost:9000` when MinIO is published on 9000).
 
 Never commit `.env` with real secrets; keep `.env.example` non-sensitive.
 
@@ -325,7 +328,7 @@ Never commit `.env` with real secrets; keep `.env.example` non-sensitive.
 ### Prerequisites
 
 - [Docker Desktop](https://www.docker.com/products/docker-desktop/) (includes Compose)
-- **Go 1.22+** (for `go run ./cmd/serve-frontend` and `go test`)
+- **Go 1.24+** (for `go run ./cmd/serve-frontend` and `go test`)
 
 ### 1) Start backend
 
@@ -371,6 +374,7 @@ Files under `migrations/` are mounted into Postgres `docker-entrypoint-initdb.d`
 | `003_friendships.sql` | friendships (required for friends / friend-gated chats) |
 | `004_reply_to_message.sql` | `messages.reply_to_message_id` (optional FK to parent message) |
 | `005_message_reactions.sql` | `message_reactions` (per user per emoji per message) |
+| `006_message_type.sql` | `messages.message_type` (`text` \| `file`) for attachments |
 
 **Existing volume?** Apply new SQL manually, e.g.:
 
@@ -378,6 +382,7 @@ Files under `migrations/` are mounted into Postgres `docker-entrypoint-initdb.d`
 docker compose exec -T postgres psql -U chat_user -d chat_db -f /docker-entrypoint-initdb.d/003_friendships.sql
 docker compose exec -T postgres psql -U chat_user -d chat_db -f /docker-entrypoint-initdb.d/004_reply_to_message.sql
 docker compose exec -T postgres psql -U chat_user -d chat_db -f /docker-entrypoint-initdb.d/005_message_reactions.sql
+docker compose exec -T postgres psql -U chat_user -d chat_db -f /docker-entrypoint-initdb.d/006_message_type.sql
 ```
 
 ---

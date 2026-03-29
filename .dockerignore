@@ -1,0 +1,7 @@
+.git
+frontend/node_modules
+frontend/.next
+**/.next
+**/node_modules
+*.log
+.env

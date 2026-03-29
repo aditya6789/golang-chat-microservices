@@ -2,35 +2,38 @@ const LS = {
   access: "chat_app_access_token",
   refresh: "chat_app_refresh_token",
   base: "chat_app_api_base",
-};
+} as const;
 
-export function getBase() {
+export function getBase(): string {
+  if (typeof window === "undefined") return "http://localhost:8080";
   return (localStorage.getItem(LS.base) || "http://localhost:8080").replace(/\/$/, "");
 }
 
-export function setBase(url) {
+export function setBase(url: string): void {
   localStorage.setItem(LS.base, (url || "").trim().replace(/\/$/, ""));
 }
 
-export function getAccess() {
+export function getAccess(): string {
+  if (typeof window === "undefined") return "";
   return localStorage.getItem(LS.access) || "";
 }
 
-export function getRefresh() {
+export function getRefresh(): string {
+  if (typeof window === "undefined") return "";
   return localStorage.getItem(LS.refresh) || "";
 }
 
-export function setTokens(access, refresh) {
+export function setTokens(access: string, refresh: string): void {
   if (access) localStorage.setItem(LS.access, access);
   if (refresh) localStorage.setItem(LS.refresh, refresh);
 }
 
-export function clearTokens() {
+export function clearTokens(): void {
   localStorage.removeItem(LS.access);
   localStorage.removeItem(LS.refresh);
 }
 
-export function jwtSub(token) {
+export function jwtSub(token: string | null): string | null {
   if (!token) return null;
   try {
     const p = token.split(".")[1];
@@ -38,14 +41,14 @@ export function jwtSub(token) {
     const pad = p.length % 4;
     const b64 =
       p.replace(/-/g, "+").replace(/_/g, "/") + (pad ? "=".repeat(4 - pad) : "");
-    const o = JSON.parse(atob(b64));
+    const o = JSON.parse(atob(b64)) as { sub?: string };
     return o.sub || null;
   } catch {
     return null;
   }
 }
 
-async function parseBody(res) {
+async function parseBody(res: Response): Promise<unknown> {
   const text = await res.text();
   if (!text) return null;
   try {
@@ -55,40 +58,42 @@ async function parseBody(res) {
   }
 }
 
-/**
- * @param {string} method
- * @param {string} path
- * @param {object|undefined} body
- * @param {string|undefined} tokenOverride Bearer token (optional)
- */
-export async function rawApi(method, path, body, tokenOverride) {
+export type ApiResult = { ok: boolean; status: number; data: unknown };
+
+export async function rawApi(
+  method: string,
+  path: string,
+  body?: object,
+  tokenOverride?: string
+): Promise<ApiResult> {
   const base = getBase();
   const url = base + path;
-  const headers = { "Content-Type": "application/json" };
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
   const t = tokenOverride !== undefined ? tokenOverride : getAccess();
   if (t) headers.Authorization = "Bearer " + t;
-  const opt = { method, headers };
+  const opt: RequestInit = { method, headers };
   if (body !== undefined) opt.body = JSON.stringify(body);
   const res = await fetch(url, opt);
   const data = await parseBody(res);
   return { ok: res.ok, status: res.status, data };
 }
 
-export async function api(method, path, body) {
+export async function api(method: string, path: string, body?: object): Promise<ApiResult> {
   let r = await rawApi(method, path, body);
   if (r.status === 401 && getRefresh()) {
     const ref = await rawApi("POST", "/auth/refresh", {
       refresh_token: getRefresh(),
     });
-    if (ref.ok && ref.data?.access_token) {
-      setTokens(ref.data.access_token, ref.data.refresh_token || getRefresh());
+    const refData = ref.data as { access_token?: string; refresh_token?: string } | null;
+    if (ref.ok && refData?.access_token) {
+      setTokens(refData.access_token, refData.refresh_token || getRefresh());
       r = await rawApi(method, path, body);
     }
   }
   return r;
 }
 
-export function wsURL(chatId) {
+export function wsURL(chatId: string): string {
   const base = getBase();
   const u = new URL(base);
   const proto = u.protocol === "https:" ? "wss:" : "ws:";

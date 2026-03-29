@@ -25,6 +25,7 @@ type Message struct {
 	ID                 string        `json:"id"`
 	ChatID             string        `json:"chat_id"`
 	SenderID           string        `json:"sender_id"`
+	MessageType        string        `json:"message_type"`
 	Content            string        `json:"content"`
 	CreatedAt          time.Time     `json:"created_at"`
 	ReplyToMessageID   *string       `json:"reply_to_message_id,omitempty"`

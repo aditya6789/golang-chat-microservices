@@ -8,6 +8,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"realtime-chat-system/services/message-service/internal/attachment"
 	"realtime-chat-system/services/message-service/internal/model"
 	"realtime-chat-system/services/message-service/internal/repository"
 
@@ -15,16 +16,122 @@ import (
 	"github.com/nats-io/nats.go"
 )
 
+// FileAttachment is the client-provided metadata after a successful presigned PUT.
+type FileAttachment struct {
+	ObjectKey  string `json:"object_key"`
+	Filename   string `json:"filename"`
+	MimeType   string `json:"mime_type"`
+	SizeBytes  int64  `json:"size_bytes"`
+}
+
+type fileContentJSON struct {
+	ObjectKey   string `json:"object_key"`
+	Filename    string `json:"filename"`
+	MimeType    string `json:"mime_type"`
+	SizeBytes   int64  `json:"size_bytes"`
+	DownloadURL string `json:"download_url"`
+}
+
 type MessageService struct {
 	repo      *repository.MessageRepository
 	chats     *repository.ChatRepository
 	receipts  *repository.ReceiptRepository
 	reactions *repository.ReactionRepository
+	attach    *attachment.Store
 	nc        *nats.Conn
 }
 
-func New(repo *repository.MessageRepository, chats *repository.ChatRepository, receipts *repository.ReceiptRepository, reactions *repository.ReactionRepository, nc *nats.Conn) *MessageService {
-	return &MessageService{repo: repo, chats: chats, receipts: receipts, reactions: reactions, nc: nc}
+func New(repo *repository.MessageRepository, chats *repository.ChatRepository, receipts *repository.ReceiptRepository, reactions *repository.ReactionRepository, attach *attachment.Store, nc *nats.Conn) *MessageService {
+	return &MessageService{repo: repo, chats: chats, receipts: receipts, reactions: reactions, attach: attach, nc: nc}
+}
+
+func normMIME(s string) string {
+	return strings.ToLower(strings.TrimSpace(strings.Split(s, ";")[0]))
+}
+
+func mimeCompatible(declared, actual string) bool {
+	d, a := normMIME(declared), normMIME(actual)
+	if d == "" || a == "" {
+		return false
+	}
+	if d == a {
+		return true
+	}
+	if strings.HasPrefix(d, "image/") && strings.HasPrefix(a, "image/") {
+		return true
+	}
+	if strings.HasPrefix(d, "text/") && strings.HasPrefix(a, "text/") {
+		return true
+	}
+	return false
+}
+
+func (s *MessageService) finalizeFileAttachment(ctx context.Context, chatID string, f *FileAttachment) (string, error) {
+	if f == nil || strings.TrimSpace(f.ObjectKey) == "" {
+		return "", errors.New("file.object_key required")
+	}
+	if s.attach == nil {
+		return "", errors.New("attachments not configured")
+	}
+	prefix := attachment.KeyPrefixForChat(chatID)
+	if !strings.HasPrefix(f.ObjectKey, prefix) {
+		return "", errors.New("invalid object_key for this chat")
+	}
+	if !attachment.AllowedContentType(f.MimeType) {
+		return "", errors.New("mime type not allowed")
+	}
+	headSize, headCT, err := s.attach.HeadObject(ctx, f.ObjectKey)
+	if err != nil {
+		return "", errors.New("uploaded object not found")
+	}
+	if headSize != f.SizeBytes {
+		return "", errors.New("size mismatch with stored object")
+	}
+	if !mimeCompatible(f.MimeType, headCT) {
+		return "", errors.New("content type mismatch")
+	}
+	out := fileContentJSON{
+		ObjectKey:   f.ObjectKey,
+		Filename:    f.Filename,
+		MimeType:    f.MimeType,
+		SizeBytes:   f.SizeBytes,
+		DownloadURL: s.attach.DownloadURL(f.ObjectKey),
+	}
+	b, err := json.Marshal(out)
+	return string(b), err
+}
+
+func (s *MessageService) persistMessageBody(ctx context.Context, chatID string, msgType string, text string, file *FileAttachment) (body string, mt string, err error) {
+	mt = msgType
+	if mt == "" {
+		mt = "text"
+	}
+	if mt == "file" {
+		body, err = s.finalizeFileAttachment(ctx, chatID, file)
+		if err != nil {
+			return "", "", err
+		}
+		return body, "file", nil
+	}
+	if strings.TrimSpace(text) == "" {
+		return "", "", errors.New("content required")
+	}
+	return text, "text", nil
+}
+
+// PresignAttachment returns a PUT URL for an object under this chat prefix.
+func (s *MessageService) PresignAttachment(ctx context.Context, chatID, userID, filename, contentType string, size int64) (uploadURL, objectKey string, headers map[string]string, err error) {
+	if s.attach == nil {
+		return "", "", nil, errors.New("attachments not configured")
+	}
+	ok, err := s.chats.IsMember(ctx, chatID, userID)
+	if err != nil {
+		return "", "", nil, err
+	}
+	if !ok {
+		return "", "", nil, errors.New("forbidden: not a chat member")
+	}
+	return s.attach.PresignPut(ctx, chatID, filename, contentType, size)
 }
 
 func normalizeEmoji(s string) (string, error) {
@@ -146,7 +253,7 @@ func (s *MessageService) attachReplyPreview(ctx context.Context, m *model.Messag
 	m.ReplyTo = p
 }
 
-func (s *MessageService) Create(ctx context.Context, chatID, senderID, content, idem string, replyTo *string) (*model.Message, error) {
+func (s *MessageService) Create(ctx context.Context, chatID, senderID, idem string, replyTo *string, msgType string, text string, file *FileAttachment) (*model.Message, error) {
 	if replyTo != nil && *replyTo == "" {
 		replyTo = nil
 	}
@@ -166,7 +273,11 @@ func (s *MessageService) Create(ctx context.Context, chatID, senderID, content, 
 	if !ok {
 		return nil, errors.New("forbidden: not a chat member")
 	}
-	m, inserted, err := s.repo.Create(ctx, chatID, senderID, content, idem, replyTo)
+	body, mt, err := s.persistMessageBody(ctx, chatID, msgType, text, file)
+	if err != nil {
+		return nil, err
+	}
+	m, inserted, err := s.repo.Create(ctx, chatID, senderID, body, idem, replyTo, mt)
 	if err != nil {
 		return nil, err
 	}
@@ -216,11 +327,13 @@ func (s *MessageService) History(ctx context.Context, chatID, userID string, lim
 
 func (s *MessageService) PersistFromEvent(ctx context.Context, payload []byte) error {
 	var in struct {
-		ChatID             string `json:"chat_id"`
-		SenderID           string `json:"sender_id"`
-		Content            string `json:"content"`
-		IdempotencyKey     string `json:"idempotency_key"`
-		ReplyToMessageID   string `json:"reply_to_message_id"`
+		ChatID           string           `json:"chat_id"`
+		SenderID         string           `json:"sender_id"`
+		Content          string           `json:"content"`
+		MessageType      string           `json:"message_type"`
+		File             *FileAttachment  `json:"file"`
+		IdempotencyKey   string           `json:"idempotency_key"`
+		ReplyToMessageID string           `json:"reply_to_message_id"`
 	}
 	if err := json.Unmarshal(payload, &in); err != nil {
 		return err
@@ -246,7 +359,11 @@ func (s *MessageService) PersistFromEvent(ctx context.Context, payload []byte) e
 		}
 		replyPtr = &in.ReplyToMessageID
 	}
-	m, inserted, err := s.repo.Create(ctx, in.ChatID, in.SenderID, in.Content, in.IdempotencyKey, replyPtr)
+	body, mt, err := s.persistMessageBody(ctx, in.ChatID, in.MessageType, in.Content, in.File)
+	if err != nil {
+		return err
+	}
+	m, inserted, err := s.repo.Create(ctx, in.ChatID, in.SenderID, body, in.IdempotencyKey, replyPtr, mt)
 	if err != nil {
 		return err
 	}

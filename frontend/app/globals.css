@@ -12,7 +12,7 @@
   --recv: #252d3d;
   --danger: #f07178;
   --radius: 12px;
-  --font: "DM Sans", system-ui, sans-serif;
+  --font: var(--font-dm-sans), system-ui, sans-serif;
 }
 
 *,
@@ -690,6 +690,124 @@ code {
   word-break: break-word;
 }
 
+.bubble-file {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  margin-top: 0.15rem;
+}
+
+.bubble-file-thumb img {
+  max-width: min(280px, 100%);
+  max-height: 220px;
+  border-radius: 8px;
+  display: block;
+}
+
+.bubble-file-row {
+  font-size: 0.92rem;
+  line-height: 1.4;
+}
+
+.bubble-file-link {
+  color: inherit;
+  font-weight: 500;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.bubble-file-meta {
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.link-preview-card {
+  display: flex;
+  flex-direction: row;
+  gap: 0.65rem;
+  margin-top: 0.55rem;
+  max-width: min(360px, 100%);
+  padding: 0.5rem 0.6rem;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.04);
+  text-decoration: none;
+  color: inherit;
+  align-items: stretch;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.link-preview-card:hover {
+  border-color: var(--muted);
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.link-preview-img-wrap {
+  flex: 0 0 88px;
+  width: 88px;
+  min-height: 64px;
+  border-radius: 6px;
+  overflow: hidden;
+  background: rgba(0, 0, 0, 0.25);
+  align-self: center;
+}
+
+.link-preview-img-wrap img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  min-height: 64px;
+  max-height: 88px;
+}
+
+.link-preview-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.link-preview-site {
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
+.link-preview-title {
+  font-size: 0.88rem;
+  font-weight: 600;
+  line-height: 1.3;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.link-preview-desc {
+  font-size: 0.78rem;
+  color: var(--muted);
+  line-height: 1.35;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 .bubble-reactions {
   display: flex;
   flex-wrap: wrap;
@@ -788,6 +906,52 @@ code {
   text-overflow: ellipsis;
 }
 
+.composer-attachment-draft {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 0.65rem;
+  padding: 0.55rem 0.65rem;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+}
+
+.composer-attachment-preview {
+  flex: 1 1 140px;
+  min-width: 0;
+}
+
+.composer-attachment-img {
+  display: block;
+  max-width: min(220px, 100%);
+  max-height: 160px;
+  width: auto;
+  height: auto;
+  border-radius: 8px;
+  object-fit: contain;
+  background: rgba(0, 0, 0, 0.2);
+}
+
+.composer-attachment-file {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  padding: 0.35rem 0;
+}
+
+.composer-attachment-name {
+  font-size: 0.85rem;
+  word-break: break-all;
+}
+
+.composer-attachment-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+}
+
 .composer textarea {
   flex: 1;
   resize: none;
@@ -804,6 +968,14 @@ code {
 
 .composer .btn.primary {
   padding: 0.65rem 1.25rem;
+}
+
+.composer .btn.icon-attach {
+  flex: 0 0 auto;
+  min-width: 44px;
+  padding: 0.65rem 0.75rem;
+  font-size: 1.25rem;
+  line-height: 1;
 }
 
 /* Modals */

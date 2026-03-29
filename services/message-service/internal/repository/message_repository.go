@@ -3,7 +3,9 @@ package repository
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
+	"strings"
 	"unicode/utf8"
 
 	"realtime-chat-system/services/message-service/internal/model"
@@ -66,23 +68,38 @@ func (r *MessageRepository) ChatIDByMessageID(ctx context.Context, messageID str
 func (r *MessageRepository) GetReplyPreview(ctx context.Context, parentID, chatID string) (*model.ReplyPreview, error) {
 	var p model.ReplyPreview
 	var content string
+	var msgType string
 	err := r.db.QueryRow(ctx, `
-		SELECT id::text, sender_id::text, content, created_at
+		SELECT id::text, sender_id::text, content, created_at, message_type
 		FROM messages WHERE id=$1::uuid AND chat_id=$2::uuid`,
-		parentID, chatID).Scan(&p.ID, &p.SenderID, &content, &p.CreatedAt)
+		parentID, chatID).Scan(&p.ID, &p.SenderID, &content, &p.CreatedAt, &msgType)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	p.Content = truncateRunes(content, 280)
+	if msgType == "file" {
+		var meta struct {
+			Filename string `json:"filename"`
+		}
+		if json.Unmarshal([]byte(content), &meta) == nil && strings.TrimSpace(meta.Filename) != "" {
+			p.Content = truncateRunes("📎 "+meta.Filename, 280)
+		} else {
+			p.Content = "📎 File"
+		}
+	} else {
+		p.Content = truncateRunes(content, 280)
+	}
 	return &p, nil
 }
 
 // Create inserts a message. When idempotency_key is set, a conflict returns the existing row
 // and inserted=false so callers avoid duplicate realtime fan-out.
-func (r *MessageRepository) Create(ctx context.Context, chatID, senderID, content, idemKey string, replyTo *string) (*model.Message, bool, error) {
+func (r *MessageRepository) Create(ctx context.Context, chatID, senderID, content, idemKey string, replyTo *string, msgType string) (*model.Message, bool, error) {
+	if msgType == "" {
+		msgType = "text"
+	}
 	id := uuid.NewString()
 	var idem any
 	if idemKey == "" {
@@ -99,12 +116,12 @@ func (r *MessageRepository) Create(ctx context.Context, chatID, senderID, conten
 
 	if idemKey != "" {
 		err := r.db.QueryRow(ctx, `
-			INSERT INTO messages (id, chat_id, sender_id, content, idempotency_key, reply_to_message_id)
-			VALUES ($1,$2,$3,$4,$5,$6::uuid)
+			INSERT INTO messages (id, chat_id, sender_id, content, idempotency_key, reply_to_message_id, message_type)
+			VALUES ($1,$2,$3,$4,$5,$6::uuid,$7)
 			ON CONFLICT (idempotency_key) DO NOTHING
-			RETURNING id, chat_id, sender_id, content, created_at, reply_to_message_id::text`,
-			id, chatID, senderID, content, idem, replyAny).
-			Scan(&m.ID, &m.ChatID, &m.SenderID, &m.Content, &m.CreatedAt, &replyNS)
+			RETURNING id, chat_id, sender_id, message_type, content, created_at, reply_to_message_id::text`,
+			id, chatID, senderID, content, idem, replyAny, msgType).
+			Scan(&m.ID, &m.ChatID, &m.SenderID, &m.MessageType, &m.Content, &m.CreatedAt, &replyNS)
 		if err == nil {
 			m.ReplyToMessageID = scanReplyKey(replyNS)
 			return &m, true, nil
@@ -113,9 +130,9 @@ func (r *MessageRepository) Create(ctx context.Context, chatID, senderID, conten
 			return nil, false, err
 		}
 		err = r.db.QueryRow(ctx, `
-			SELECT id, chat_id, sender_id, content, created_at, reply_to_message_id::text
+			SELECT id, chat_id, sender_id, message_type, content, created_at, reply_to_message_id::text
 			FROM messages WHERE idempotency_key=$1`,
-			idemKey).Scan(&m.ID, &m.ChatID, &m.SenderID, &m.Content, &m.CreatedAt, &replyNS)
+			idemKey).Scan(&m.ID, &m.ChatID, &m.SenderID, &m.MessageType, &m.Content, &m.CreatedAt, &replyNS)
 		if err != nil {
 			return nil, false, err
 		}
@@ -123,11 +140,11 @@ func (r *MessageRepository) Create(ctx context.Context, chatID, senderID, conten
 		return &m, false, nil
 	}
 	err := r.db.QueryRow(ctx, `
-		INSERT INTO messages (id, chat_id, sender_id, content, idempotency_key, reply_to_message_id)
-		VALUES ($1,$2,$3,$4,$5,$6::uuid)
-		RETURNING id, chat_id, sender_id, content, created_at, reply_to_message_id::text`,
-		id, chatID, senderID, content, idem, replyAny).
-		Scan(&m.ID, &m.ChatID, &m.SenderID, &m.Content, &m.CreatedAt, &replyNS)
+		INSERT INTO messages (id, chat_id, sender_id, content, idempotency_key, reply_to_message_id, message_type)
+		VALUES ($1,$2,$3,$4,$5,$6::uuid,$7)
+		RETURNING id, chat_id, sender_id, message_type, content, created_at, reply_to_message_id::text`,
+		id, chatID, senderID, content, idem, replyAny, msgType).
+		Scan(&m.ID, &m.ChatID, &m.SenderID, &m.MessageType, &m.Content, &m.CreatedAt, &replyNS)
 	if err != nil {
 		return nil, false, err
 	}
@@ -138,8 +155,8 @@ func (r *MessageRepository) Create(ctx context.Context, chatID, senderID, conten
 func (r *MessageRepository) History(ctx context.Context, chatID string, limit, offset int) ([]model.Message, error) {
 	rows, err := r.db.Query(ctx, `
 		SELECT
-			m.id, m.chat_id, m.sender_id, m.content, m.created_at, m.reply_to_message_id::text,
-			p.id::text, p.sender_id::text, p.content, p.created_at
+			m.id, m.chat_id, m.sender_id, m.message_type, m.content, m.created_at, m.reply_to_message_id::text,
+			p.id::text, p.sender_id::text, p.content, p.created_at, p.message_type
 		FROM messages m
 		LEFT JOIN messages p ON p.id = m.reply_to_message_id
 		WHERE m.chat_id=$1
@@ -155,18 +172,30 @@ func (r *MessageRepository) History(ctx context.Context, chatID string, limit, o
 		var replyNS sql.NullString
 		var pid, psender, pcontent sql.NullString
 		var pcreated sql.NullTime
+		var pmsgType sql.NullString
 		if err := rows.Scan(
-			&m.ID, &m.ChatID, &m.SenderID, &m.Content, &m.CreatedAt, &replyNS,
-			&pid, &psender, &pcontent, &pcreated,
+			&m.ID, &m.ChatID, &m.SenderID, &m.MessageType, &m.Content, &m.CreatedAt, &replyNS,
+			&pid, &psender, &pcontent, &pcreated, &pmsgType,
 		); err != nil {
 			return nil, err
 		}
 		m.ReplyToMessageID = scanReplyKey(replyNS)
 		if pid.Valid && psender.Valid && pcontent.Valid && pcreated.Valid {
+			quote := truncateRunes(pcontent.String, 280)
+			if pmsgType.Valid && pmsgType.String == "file" {
+				var meta struct {
+					Filename string `json:"filename"`
+				}
+				if json.Unmarshal([]byte(pcontent.String), &meta) == nil && strings.TrimSpace(meta.Filename) != "" {
+					quote = truncateRunes("📎 "+meta.Filename, 280)
+				} else {
+					quote = "📎 File"
+				}
+			}
 			m.ReplyTo = &model.ReplyPreview{
 				ID:        pid.String,
 				SenderID:  psender.String,
-				Content:   truncateRunes(pcontent.String, 280),
+				Content:   quote,
 				CreatedAt: pcreated.Time,
 			}
 		}
